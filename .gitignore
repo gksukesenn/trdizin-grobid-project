@@ -1,0 +1,52 @@
+# --------------------------------------------------
+# Gizli bilgiler
+# --------------------------------------------------
+.env
+.env.*
+!.env.example
+
+# --------------------------------------------------
+# Çalışma sırasında oluşan veriler
+# PDF, XML, metadata, log ve MySQL dosyaları
+# --------------------------------------------------
+data/
+
+# Olası yerel veritabanı klasörleri
+database/mysql/
+database/data/
+
+# --------------------------------------------------
+# Python geçici dosyaları
+# --------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# --------------------------------------------------
+# Log ve geçici dosyalar
+# --------------------------------------------------
+*.log
+*.tmp
+*.temp
+
+# --------------------------------------------------
+# Geliştirme sırasında oluşturulan yedekler
+# --------------------------------------------------
+*.before-*
+*.accidental-edit
+*.save
+*.bak
+*~
+
+# --------------------------------------------------
+# Editör ve işletim sistemi dosyaları
+# --------------------------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.backup
