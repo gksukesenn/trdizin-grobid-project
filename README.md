@@ -6,6 +6,12 @@ Proje; PDF indirme, akademik kaynakça çıkarımı, veritabanına aktarma, DOI 
 
 > Bu proje akademik araştırma ve geliştirme amacıyla hazırlanmıştır. TR Dizin veya GROBID ekipleriyle resmî bir bağlantısı bulunmamaktadır.
 
+## Web Arayüzü Görünümü
+
+![TR Dizin ve GROBID karşılaştırma arayüzü](docs/images/comparison-interface.png)
+
+Arayüz; orijinal PDF dosyasını, TR Dizin kaynakçalarını, GROBID tarafından çıkarılan kaynakçaları ve eşleştirme sonuçlarını aynı ekran üzerinde inceleme imkânı sağlar.
+
 ---
 
 ## Projenin Amacı
