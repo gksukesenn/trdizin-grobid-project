@@ -50,3 +50,4 @@ venv/
 .DS_Store
 Thumbs.db
 *.backup
+backups/
