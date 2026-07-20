@@ -198,7 +198,7 @@ docker compose version
 ## Projenin İndirilmesi
 
 ```bash
-git clone <repository-address>
+git clone https://github.com/gksukesenn/trdizin-grobid-project.git
 cd trdizin-grobid-project
 ```
 
