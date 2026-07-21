@@ -14,35 +14,24 @@ from fastapi.responses import (
 )
 from mysql.connector import Error
 
-
-PDF_DIRECTORY = Path(
-    os.getenv("PDF_DIRECTORY", "/data/pdfs")
+from trdizin_app.application.exceptions import (
+    DatabaseUnavailableError,
+)
+from trdizin_app.infrastructure.config.settings import (
+    load_settings,
+)
+from trdizin_app.infrastructure.database.connection import (
+    create_database_connection,
 )
 
-XML_DIRECTORY = Path(
-    os.getenv("XML_DIRECTORY", "/data/grobid-output")
-)
 
-TEMPLATE_DIRECTORY = Path(
-    os.getenv("TEMPLATE_DIRECTORY", "/app/templates")
-)
+SETTINGS = load_settings()
+
+PDF_DIRECTORY = SETTINGS.pdf_directory
+XML_DIRECTORY = SETTINGS.xml_directory
+TEMPLATE_DIRECTORY = SETTINGS.template_directory
 
 INDEX_HTML = TEMPLATE_DIRECTORY / "index.html"
-
-MYSQL_HOST = os.getenv("MYSQL_HOST", "mysql")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_DATABASE = os.getenv(
-    "MYSQL_DATABASE",
-    "trdizin_grobid",
-)
-MYSQL_USER = os.getenv(
-    "MYSQL_USER",
-    "trdizin_app",
-)
-MYSQL_PASSWORD = os.getenv(
-    "MYSQL_PASSWORD",
-    "",
-)
 
 
 app = FastAPI(
@@ -53,25 +42,14 @@ app = FastAPI(
 
 def get_connection():
     try:
-        connection = mysql.connector.connect(
-            host=MYSQL_HOST,
-            port=MYSQL_PORT,
-            database=MYSQL_DATABASE,
-            user=MYSQL_USER,
-            password=MYSQL_PASSWORD,
-            charset="utf8mb4",
-            connection_timeout=15,
+        return create_database_connection(
+            SETTINGS
         )
 
-        return connection
-
-    except Error as error:
+    except DatabaseUnavailableError as error:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "MySQL bağlantısı kurulamadı: "
-                f"{error}"
-            ),
+            detail=str(error),
         ) from error
 
 
