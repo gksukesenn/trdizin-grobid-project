@@ -4,8 +4,14 @@ from pathlib import Path
 from typing import Any
 
 import mysql.connector
+import requests
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+)
 from mysql.connector import Error
 
 
@@ -961,23 +967,104 @@ def grobid_tei(
 @app.get("/pdfs/{publication_id}.pdf")
 def get_pdf(
     publication_id: int,
-) -> FileResponse:
+) -> Response:
+    # Yerel PDF mevcutsa önce onu kullan.
     pdf_path = (
         PDF_DIRECTORY
         / f"{publication_id}.pdf"
     )
 
-    if not pdf_path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="PDF bulunamadı.",
+    if pdf_path.exists():
+        return FileResponse(
+            path=pdf_path,
+            media_type="application/pdf",
+            filename=f"{publication_id}.pdf",
+            content_disposition_type="inline",
         )
 
-    return FileResponse(
-        path=pdf_path,
-        media_type="application/pdf",
-        filename=f"{publication_id}.pdf",
-        content_disposition_type="inline",
+    # Yerel dosya yoksa PDF kimliğini
+    # MySQL veritabanından al.
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    try:
+        cursor.execute(
+            """
+            SELECT pdf_uuid
+            FROM articles
+            WHERE publication_id = %s
+            """,
+            (publication_id,),
+        )
+        row = cursor.fetchone()
+    finally:
+        cursor.close()
+        connection.close()
+
+    if row is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Makale bulunamadı.",
+        )
+
+    pdf_uuid = str(row[0] or "").strip()
+
+    if not pdf_uuid:
+        raise HTTPException(
+            status_code=404,
+            detail="Makalenin PDF kimliği bulunamadı.",
+        )
+
+    file_api_url = (
+        "https://search.trdizin.gov.tr/"
+        f"api/getFile/{pdf_uuid}"
+        "?showViewer=false"
+    )
+
+    try:
+        response = requests.get(
+            file_api_url,
+            headers={
+                "User-Agent": (
+                    "TRDizin-Grobid-Research/1.0"
+                ),
+                "Accept": "application/json",
+            },
+            timeout=(20, 120),
+        )
+        response.raise_for_status()
+        download_url = response.json()
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "PDF bağlantısı TR Dizin'den "
+                "alınamadı."
+            ),
+        ) from error
+    except ValueError as error:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "TR Dizin geçerli bir PDF "
+                "bağlantısı döndürmedi."
+            ),
+        ) from error
+
+    if not isinstance(download_url, str):
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "TR Dizin geçerli bir PDF "
+                "bağlantısı döndürmedi."
+            ),
+        )
+
+    # Tarayıcı gerçek PDF dosyasını doğrudan
+    # TR Dizin sunucusundan açar.
+    return RedirectResponse(
+        url=download_url,
+        status_code=307,
     )
 
 
