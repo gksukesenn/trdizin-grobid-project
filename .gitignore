@@ -51,3 +51,4 @@ venv/
 Thumbs.db
 *.backup
 backups/
+deploy/huggingface/data/*.sqlite
