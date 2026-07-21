@@ -43,6 +43,15 @@ GROBID_IMPORT_ONLY_MISSING = (
     in {"1", "true", "yes", "on"}
 )
 
+GROBID_IMPORT_PUBLICATION_IDS = {
+    int(value.strip())
+    for value in os.getenv(
+        "GROBID_IMPORT_PUBLICATION_IDS",
+        "",
+    ).split(",")
+    if value.strip()
+}
+
 TEI_NAMESPACE = {
     "tei": "http://www.tei-c.org/ns/1.0"
 }
@@ -316,6 +325,14 @@ def get_xml_files() -> list[Path]:
         ),
         reverse=True,
     )
+
+    if GROBID_IMPORT_PUBLICATION_IDS:
+        xml_files = [
+            xml_path
+            for xml_path in xml_files
+            if publication_id_from_path(xml_path)
+            in GROBID_IMPORT_PUBLICATION_IDS
+        ]
 
     if GROBID_IMPORT_LIMIT > 0:
         xml_files = xml_files[

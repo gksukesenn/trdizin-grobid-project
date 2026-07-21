@@ -5,11 +5,11 @@ from typing import Any
 
 import mysql.connector
 import requests
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
-    RedirectResponse,
+    StreamingResponse,
     Response,
 )
 from mysql.connector import Error
@@ -153,8 +153,8 @@ def serialize_article(row: dict[str, Any]) -> dict[str, Any]:
             row.get("reference_count") or 0
         ),
         "has_pdf": (
-            row.get("download_status")
-            == "downloaded"
+            row.get("download_status") == "downloaded"
+            or bool(row.get("pdf_uuid"))
         ),
         "has_xml": (
             row.get("processing_status")
@@ -274,6 +274,7 @@ def list_articles(
                 a.doi,
                 a.publication_year,
                 a.journal_name,
+                a.pdf_uuid,
                 a.download_status,
                 gd.processing_status,
                 gd.reference_count
@@ -281,8 +282,10 @@ def list_articles(
             LEFT JOIN grobid_documents AS gd
                 ON gd.publication_id =
                    a.publication_id
-            WHERE
+            WHERE (
                 a.download_status = 'downloaded'
+                OR a.pdf_uuid IS NOT NULL
+            )
             ORDER BY
                 a.publication_id DESC
             LIMIT %s
@@ -327,7 +330,10 @@ def search_articles(
     )
 
     where_clauses = [
-        "a.download_status = 'downloaded'"
+        (
+            "a.download_status = 'downloaded' "
+            "OR a.pdf_uuid IS NOT NULL"
+        )
     ]
 
     parameters: list[Any] = []
@@ -401,6 +407,7 @@ def search_articles(
                 a.doi,
                 a.publication_year,
                 a.journal_name,
+                a.pdf_uuid,
                 a.download_status,
                 gd.processing_status,
                 gd.reference_count
@@ -967,6 +974,7 @@ def grobid_tei(
 @app.get("/pdfs/{publication_id}.pdf")
 def get_pdf(
     publication_id: int,
+    request: Request,
 ) -> Response:
     # Yerel PDF mevcutsa önce onu kullan.
     pdf_path = (
@@ -1060,11 +1068,95 @@ def get_pdf(
             ),
         )
 
-    # Tarayıcı gerçek PDF dosyasını doğrudan
-    # TR Dizin sunucusundan açar.
-    return RedirectResponse(
-        url=download_url,
-        status_code=307,
+    # PDF'yi TR Dizin'den alıp kendi endpoint'imiz
+    # üzerinden tarayıcıya aktar. Böylece tarayıcı
+    # indirme penceresi yerine dahili PDF görüntüleyiciyi açar.
+    upstream_headers = {
+        "User-Agent": "TRDizin-Grobid-Research/1.0",
+        "Accept": "application/pdf",
+    }
+
+    # Tarayıcının PDF içinde sayfa/konum değiştirebilmesi
+    # için Range başlığını TR Dizin'e ilet.
+    range_header = request.headers.get("range")
+
+    if range_header:
+        upstream_headers["Range"] = range_header
+
+    try:
+        pdf_response = requests.get(
+            download_url,
+            headers=upstream_headers,
+            stream=True,
+            allow_redirects=True,
+            timeout=(20, 120),
+        )
+    except requests.RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail="PDF, TR Dizin'den alınamadı.",
+        ) from error
+
+    if pdf_response.status_code not in {200, 206}:
+        pdf_response.close()
+
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "TR Dizin PDF isteği başarısız oldu: "
+                f"{pdf_response.status_code}"
+            ),
+        )
+
+    content_type = (
+        pdf_response.headers.get("Content-Type")
+        or ""
+    )
+
+    if "application/pdf" not in content_type.lower():
+        pdf_response.close()
+
+        raise HTTPException(
+            status_code=502,
+            detail="TR Dizin geçerli PDF içeriği döndürmedi.",
+        )
+
+    response_headers = {
+        "Content-Disposition": (
+            f'inline; filename="{publication_id}.pdf"'
+        ),
+        "Cache-Control": "private, max-age=300",
+    }
+
+    # PDF görüntüleyicinin ihtiyaç duyabileceği
+    # başlıkları karşı servisten aktar.
+    for source_name, target_name in (
+        ("Content-Length", "Content-Length"),
+        ("Content-Range", "Content-Range"),
+        ("Accept-Ranges", "Accept-Ranges"),
+        ("ETag", "ETag"),
+        ("Last-Modified", "Last-Modified"),
+    ):
+        value = pdf_response.headers.get(source_name)
+
+        if value:
+            response_headers[target_name] = value
+
+    def stream_pdf():
+        try:
+            for chunk in pdf_response.iter_content(
+                chunk_size=64 * 1024,
+            ):
+                if chunk:
+                    yield chunk
+        finally:
+            pdf_response.close()
+
+    return StreamingResponse(
+        stream_pdf(),
+        status_code=pdf_response.status_code,
+        media_type="application/pdf",
+        headers=response_headers,
     )
 
 

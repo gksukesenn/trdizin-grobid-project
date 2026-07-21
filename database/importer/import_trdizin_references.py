@@ -36,6 +36,15 @@ BATCH_SIZE = int(
     )
 )
 
+# Kaynakça aktarımının başlayacağı yayın kimliği.
+# 0 verilirse en eski makaleden başlanır.
+START_PUBLICATION_ID = int(
+    os.getenv(
+        "TRDIZIN_REFERENCE_START_PUBLICATION_ID",
+        "0",
+    )
+)
+
 DOI_PATTERN = re.compile(
     r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+",
     re.IGNORECASE,
@@ -307,7 +316,7 @@ def main() -> None:
     imported_articles = 0
     imported_references = 0
     failed_articles = 0
-    last_publication_id = 0
+    last_publication_id = START_PUBLICATION_ID
 
     try:
         while True:
@@ -334,12 +343,7 @@ def main() -> None:
                     a.publication_id,
                     a.trdizin_raw_json
                 FROM articles AS a
-                INNER JOIN grobid_documents AS gd
-                    ON gd.publication_id =
-                       a.publication_id
-                WHERE
-                    gd.processing_status = 'processed'
-                    AND a.publication_id > %s
+                WHERE a.publication_id > %s
                 ORDER BY a.publication_id
                 LIMIT %s
                 """,

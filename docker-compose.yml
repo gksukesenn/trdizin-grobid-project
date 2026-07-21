@@ -40,6 +40,29 @@ services:
       LOG_DIRECTORY: /data/logs
       PROCESS_LIMIT: "100"
 
+
+  remote-processor:
+    build:
+      context: ./processor
+    depends_on:
+      - grobid
+      - mysql
+    volumes:
+      - ./data/grobid-output:/data/grobid-output
+      - ./data/logs:/data/logs
+    environment:
+      GROBID_URL: http://grobid:8070
+      OUTPUT_DIRECTORY: /data/grobid-output
+      LOG_DIRECTORY: /data/logs
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      REMOTE_PROCESS_LIMIT: "2"
+      REMOTE_QUERY_BATCH_SIZE: "100"
+    command: ["python", "process_remote_pdfs.py"]
+
   interface:
     build:
       context: ./interface

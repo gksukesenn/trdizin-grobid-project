@@ -25,6 +25,15 @@ MATCH_ARTICLE_LIMIT = int(
     os.getenv("MATCH_ARTICLE_LIMIT", "20")
 )
 
+MATCH_PUBLICATION_IDS = [
+    int(value.strip())
+    for value in os.getenv(
+        "MATCH_PUBLICATION_IDS",
+        "",
+    ).split(",")
+    if value.strip()
+]
+
 TEXT_MATCH_THRESHOLD = float(
     os.getenv("TEXT_MATCH_THRESHOLD", "82")
 )
@@ -240,32 +249,64 @@ def classify_match(
 
 
 def get_article_ids(cursor) -> List[int]:
-    cursor.execute(
-        """
-        SELECT gd.publication_id
-        FROM grobid_documents AS gd
-        WHERE
-            gd.processing_status = 'processed'
+    if MATCH_PUBLICATION_IDS:
+        placeholders = ", ".join(
+            ["%s"] * len(MATCH_PUBLICATION_IDS)
+        )
 
-            AND EXISTS (
-                SELECT 1
-                FROM trdizin_references AS tr
-                WHERE tr.publication_id =
-                      gd.publication_id
-            )
+        cursor.execute(
+            f"""
+            SELECT gd.publication_id
+            FROM grobid_documents AS gd
+            WHERE
+                gd.publication_id IN ({placeholders})
+                AND gd.processing_status = 'processed'
 
-            AND EXISTS (
-                SELECT 1
-                FROM grobid_references AS gr
-                WHERE gr.publication_id =
-                      gd.publication_id
-            )
+                AND EXISTS (
+                    SELECT 1
+                    FROM trdizin_references AS tr
+                    WHERE tr.publication_id =
+                          gd.publication_id
+                )
 
-        ORDER BY gd.publication_id
-        LIMIT %s
-        """,
-        (MATCH_ARTICLE_LIMIT,),
-    )
+                AND EXISTS (
+                    SELECT 1
+                    FROM grobid_references AS gr
+                    WHERE gr.publication_id =
+                          gd.publication_id
+                )
+
+            ORDER BY gd.publication_id
+            """,
+            tuple(MATCH_PUBLICATION_IDS),
+        )
+    else:
+        cursor.execute(
+            """
+            SELECT gd.publication_id
+            FROM grobid_documents AS gd
+            WHERE
+                gd.processing_status = 'processed'
+
+                AND EXISTS (
+                    SELECT 1
+                    FROM trdizin_references AS tr
+                    WHERE tr.publication_id =
+                          gd.publication_id
+                )
+
+                AND EXISTS (
+                    SELECT 1
+                    FROM grobid_references AS gr
+                    WHERE gr.publication_id =
+                          gd.publication_id
+                )
+
+            ORDER BY gd.publication_id
+            LIMIT %s
+            """,
+            (MATCH_ARTICLE_LIMIT,),
+        )
 
     return [
         int(row[0])
@@ -628,6 +669,85 @@ def main() -> None:
                 len(grobid_references)
                 - matched_count
             )
+
+            cursor.execute(
+                """
+                INSERT INTO reference_matching_progress (
+                    publication_id,
+                    matching_status,
+                    doi_match_count,
+                    text_match_count,
+                    clean_match_count,
+                    merged_count,
+                    partial_count,
+                    unmatched_trdizin_count,
+                    unmatched_grobid_count,
+                    error_message,
+                    started_at,
+                    completed_at
+                )
+                VALUES (
+                    %s,
+                    'completed',
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    %s,
+                    NULL,
+                    NOW(),
+                    NOW()
+                )
+                ON DUPLICATE KEY UPDATE
+                    matching_status = 'completed',
+                    doi_match_count =
+                        VALUES(doi_match_count),
+                    text_match_count =
+                        VALUES(text_match_count),
+                    clean_match_count =
+                        VALUES(clean_match_count),
+                    merged_count =
+                        VALUES(merged_count),
+                    partial_count =
+                        VALUES(partial_count),
+                    unmatched_trdizin_count =
+                        VALUES(unmatched_trdizin_count),
+                    unmatched_grobid_count =
+                        VALUES(unmatched_grobid_count),
+                    error_message = NULL,
+                    started_at = COALESCE(
+                        started_at,
+                        NOW()
+                    ),
+                    completed_at = NOW()
+                """,
+                (
+                    publication_id,
+                    len(exact_trdizin_indexes),
+                    matched_count,
+                    article_status_counts[
+                        "text_match_clean"
+                    ],
+                    article_status_counts[
+                        "grobid_merged"
+                    ],
+                    article_status_counts[
+                        "grobid_partial"
+                    ],
+                    (
+                        len(trdizin_references)
+                        - matched_count
+                    ),
+                    (
+                        len(grobid_references)
+                        - matched_count
+                    ),
+                ),
+            )
+
+            connection.commit()
 
             print(
                 f"[{position}/{len(article_ids)}] "
