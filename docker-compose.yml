@@ -214,6 +214,46 @@ services:
 
       BATCH_PAUSE_SECONDS: "5"
       MAX_NO_PROGRESS_ROUNDS: "3"
+
+  api-pipeline-worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile.api
+    depends_on:
+      grobid:
+        condition: service_started
+      mysql:
+        condition: service_healthy
+    init: true
+    restart: "no"
+    volumes:
+      - ./data/grobid-output:/data/grobid-output
+      - ./data/logs:/data/logs
+    environment:
+      PYTHONUNBUFFERED: "1"
+
+      GROBID_URL: http://grobid:8070
+      OUTPUT_DIRECTORY: /data/grobid-output
+      GROBID_OUTPUT_DIRECTORY: /data/grobid-output
+      LOG_DIRECTORY: /data/logs
+
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+
+      PIPELINE_SYNC_TARGET_COUNT: "0"
+      PIPELINE_SYNC_PAGE_SIZE: "10"
+      PIPELINE_SYNC_START_PAGE: "1"
+
+      PIPELINE_BATCH_SIZE: "3"
+      PIPELINE_MAX_ARTICLES: "10"
+      PIPELINE_PAUSE_SECONDS: "2"
+      PIPELINE_MAX_NO_PROGRESS_ROUNDS: "3"
+    command:
+      ["python", "run_api_pipeline.py"]
+
   failed-grobid-classifier:
     build:
       context: ./processor
