@@ -1,51 +1,60 @@
 # Sunum Notları
 
-## Projenin amacı
+## Amaç
 
-TR Dizin'deki bir makalenin kaynakçasını GROBID ile otomatik çıkarmak ve yapılandırılmış JSON/ham TEI olarak göstermek. Araştırma amaçlı eski toplu indirme, içe aktarma ve eşleştirme hattı korunur; sunumun ana yolu bu önceden üretilmiş verilere bağlı değildir.
+Uygulama, TR Dizin'in kayıtlı kaynakçalarıyla aynı makalenin PDF'sinden GROBID
+tarafından çıkarılan kaynakçaları canlı olarak karşılaştırır.
 
-## Neden local PDF bağımlılığı kaldırıldı?
+## Mimari tercih
 
-Yerel PDF klasörü geliştiricinin makinesine ait gizli bir önkoşuldu ve temiz GitHub klonunda ekranın boş kalmasına yol açıyordu. Yeni akış PDF UUID'yi canlı metadata'dan alır, `getFile` ile URL'yi çözer ve içeriği yalnızca bellekte tutar. Bu yaklaşım yeniden üretilebilirliği artırır, disk artıklarını ve telifli PDF'lerin yanlışlıkla commit edilmesi riskini azaltır.
+Tek FastAPI uygulaması içinde küçük bir modüler monolit kullanılır:
 
-## Mimari karar
+- Route: HTTP doğrulama ve response
+- Use case: iş akışı
+- Port: dış servis sözleşmesi
+- Adapter: TR Dizin ve GROBID HTTP ayrıntıları
+- Domain/application service: modeller, mapping ve saf matching
 
-Modüler monolit seçildi: tek FastAPI uygulaması içinde route, use case, port ve adapter sınırları var. Sunum ölçeğinde ayrı servis/kuyruk/framework operasyon maliyeti gereksizdir; GROBID ve MySQL zaten Docker servisleridir.
+Bu kapsam için Kafka, Celery, MySQL veya ayrı mikroservisler gerekli değildir.
 
-- Route HTTP giriş/çıkışını yönetir; dış URL veya SQL bilmez.
-- Use case iş sırasını yönetir; HTTP endpoint ayrıntısını bilmez.
-- Port uygulamanın ihtiyaç duyduğu küçük sözleşmedir.
-- Adapter portu gerçek TR Dizin/GROBID HTTP çağrılarıyla uygular; timeout, retry, response doğrulama burada kalır.
+## PDF neden kaydedilmiyor?
 
-## Docker ve servis iletişimi
+TR Dizin metadata içindeki PDF UUID ile `getFile` URL'si çözülür. Browser PDF
+endpointi uzak cevabı stream eder; karşılaştırma use case'i PDF bytes'ı doğrudan
+GROBID'e yollar. `data/pdfs`, yerel TEI veya JSON dosyası oluşturulmaz. Böylece
+temiz klon kişisel arşivlerden bağımsız çalışır.
 
-Compose MySQL'i geçmiş ekranlar, GROBID'i kaynakça çıkarma, interface'i HTTP/UI için başlatır. Interface dış dünyada `search.trdizin.gov.tr` ile HTTPS üzerinden; Compose ağında `http://grobid:8070` ile konuşur. MySQL'in boş olması canlı arama/process use case'ini etkilemez.
+## Docker'ın rolü
 
-## PDF yaşam döngüsü
+Compose yalnız iki servis içerir:
 
-`TrDizinHttpClient.fetch_pdf()` stream parçalarını boyut kontrollü bir `bytearray` içinde toplar ve `bytes` döndürür. `GrobidHttpClient` bunu `BytesIO` ile multipart gönderir. `open`, `NamedTemporaryFile`, `data/pdfs` veya çıktı XML yazımı yoktur; request bittikten sonra nesneler serbest kalır.
+- `grobid`: kaynakça extraction servisi
+- `interface`: FastAPI backend ve HTML/JavaScript frontend
 
-## Temiz klon demosu
+Interface, GROBID `/api/isalive` healthcheck'i başarılı olmadan başlatılmaz.
+
+## Demo
 
 ```bash
 cp .env.example .env
-docker compose up -d --build mysql grobid interface
-curl --fail "http://localhost:8000/api/trdizin/articles/search?page=1&limit=10"
-curl --fail -X POST "http://localhost:8000/api/trdizin/articles/1448395/process-and-compare"
+docker compose up -d --build
+curl --fail http://127.0.0.1:8000/api/health
 ```
 
-Doğrulanmış örnek `1448395` PDF içerir. 22 Temmuz 2026 canlı karşılaştırmasında 39 TR Dizin ve 40 GROBID kaynakçasından 39 eşleşme bulundu; `data/pdfs` ile `data/grobid-output` dosya sayıları değişmedi.
+Arayüzde `1448395` aranır. Beklenen akış: makale ve PDF açılır, TR Dizin
+kaynakçaları görünür, GROBID otomatik çalışır ve comparison sekmesine geçilir.
+Son doğrulanmış örnekte 39 TR Dizin, 40 GROBID ve 39 eşleşme görülmüştür; canlı
+API sonucu zamanla değişebilir.
 
-## Debug anlatımı
+## Debug sırasında izlenecek değerler
 
-Breakpoint sırası:
+- `publication_id`, `pdf_uuid`, `pdf_url`
+- `len(pdf_content)`
+- `len(trdizin_references)`, `len(extraction.references)`
+- `matched_count`, `unmatched_trdizin_count`, `unmatched_grobid_count`
+- Frontend `selectionToken`, `articleSessions[publicationId].isProcessing`
 
-1. `routes/trdizin.py:search_articles` veya `process_article`
-2. ilgili use case'in `execute()` metodu
-3. `TrDizinHttpClient.get_article/resolve_pdf_url/fetch_pdf`
-4. `GrobidHttpClient.extract_references`
-5. `GrobidHttpClient._parse_references`
+## Legacy archive
 
-Beklenen değişkenler: pozitif `publication_id`, dolu `pdf_uuid`, HTTPS `pdf_url`, `%PDF-` ile başlayan `pdf_content`, 200 GROBID cevabı, `<TEI` içeren XML, liste türünde `references` ve pozitif `duration_ms`.
-
-Muhtemel hata noktaları: TR Dizin DNS/ağ gecikmesi, publication'ın PDF'siz olması, imzacı URL'nin süresinin dolması, 50 MB PDF sınırı, GROBID'in henüz hazır olmaması, taranmış/OCR gerektiren PDF veya geçersiz TEI. HTTP cevabındaki Türkçe `detail` mesajı kullanıcıya gösterilir; log için `docker compose logs -f interface grobid` kullanılır.
+Eski downloader, importer, MySQL, worker ve batch araştırma pipeline'ı
+`archive/full-pipeline-v1` branch'inde korunmaktadır.

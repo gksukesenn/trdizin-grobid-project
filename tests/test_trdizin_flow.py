@@ -22,6 +22,7 @@ from trdizin_app.infrastructure.external.trdizin_http_client import (  # noqa: E
 )
 from trdizin_app.infrastructure.config.settings import load_settings  # noqa: E402
 from trdizin_app.presentation.api.routes.trdizin import create_trdizin_router  # noqa: E402
+from app import app as live_app  # noqa: E402
 
 
 class FakeGateway:
@@ -65,6 +66,22 @@ class FakeExtractor:
 
 
 class TrDizinFlowTests(unittest.TestCase):
+    def test_live_app_health_has_no_archive_or_database_counts(self) -> None:
+        response = TestClient(live_app).get("/api/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
+        app_source = (Path(__file__).parents[1] / "interface/app.py").read_text(
+            encoding="utf-8"
+        ).lower()
+        settings_source = (
+            Path(__file__).parents[1]
+            / "interface/trdizin_app/infrastructure/config/settings.py"
+        ).read_text(encoding="utf-8").lower()
+        for forbidden in ("mysql", "sqlite", "data/pdfs", "grobid-output"):
+            self.assertNotIn(forbidden, app_source)
+            self.assertNotIn(forbidden, settings_source)
+
     def test_maps_real_search_fields(self) -> None:
         article = TrDizinHttpClient._article_from_record({
             "_id": "1448395",

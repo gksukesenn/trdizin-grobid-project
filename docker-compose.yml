@@ -1,358 +1,47 @@
 services:
   grobid:
     image: lfoppiano/grobid:0.8.0
-    container_name: trdizin-grobid
-    ports:
-      - "8070:8070"
     restart: unless-stopped
-    volumes:
-      - ./data/pdfs:/data/pdfs
-      - ./data/grobid-output:/data/grobid-output
-
-  downloader:
-    build:
-      context: ./downloader
-    volumes:
-      - ./data/pdfs:/data/pdfs
-      - ./data/metadata:/data/metadata
-      - ./data/logs:/data/logs
-    environment:
-      PDF_DIRECTORY: /data/pdfs
-      METADATA_DIRECTORY: /data/metadata
-      LOG_DIRECTORY: /data/logs
-      DOWNLOAD_PAGE: "1"
-      DOWNLOAD_LIMIT: "10"
-      REQUEST_DELAY_SECONDS: "1"
-
-  processor:
-    build:
-      context: ./processor
-    depends_on:
-      - grobid
-    volumes:
-      - ./data/pdfs:/data/pdfs:ro
-      - ./data/grobid-output:/data/grobid-output
-      - ./data/logs:/data/logs
-    environment:
-      GROBID_URL: http://grobid:8070
-      PDF_DIRECTORY: /data/pdfs
-      OUTPUT_DIRECTORY: /data/grobid-output
-      LOG_DIRECTORY: /data/logs
-      PROCESS_LIMIT: "100"
-
-
-  remote-processor:
-    build:
-      context: ./processor
-    depends_on:
-      - grobid
-      - mysql
-    volumes:
-      - ./data/grobid-output:/data/grobid-output
-      - ./data/logs:/data/logs
-    environment:
-      GROBID_URL: http://grobid:8070
-      OUTPUT_DIRECTORY: /data/grobid-output
-      LOG_DIRECTORY: /data/logs
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      REMOTE_PROCESS_LIMIT: "2"
-      REMOTE_QUERY_BATCH_SIZE: "100"
-    command: ["python", "process_remote_pdfs.py"]
+    ports:
+      - "127.0.0.1:8070:8070"
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/8070 &&
+          printf 'GET /api/isalive HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 &&
+          grep -q 'true' <&3
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
 
   interface:
     build:
       context: ./interface
-    container_name: trdizin-interface
-    ports:
-      - "8000:8000"
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:8000:8000"
     depends_on:
-      mysql:
-        condition: service_healthy
       grobid:
-        condition: service_started
-    volumes:
-      - ./data/pdfs:/data/pdfs:ro
-      - ./data/grobid-output:/data/grobid-output:ro
-      - ./data/metadata:/data/metadata:ro
+        condition: service_healthy
     environment:
-      PDF_DIRECTORY: /data/pdfs
-      XML_DIRECTORY: /data/grobid-output
-      METADATA_DIRECTORY: /data/metadata
-      TEMPLATE_DIRECTORY: /app/templates
       TRDIZIN_BASE_URL: ${TRDIZIN_BASE_URL:-https://search.trdizin.gov.tr}
-      GROBID_URL: http://grobid:8070
+      GROBID_URL: ${GROBID_URL:-http://grobid:8070}
       EXTERNAL_CONNECT_TIMEOUT: ${EXTERNAL_CONNECT_TIMEOUT:-10}
       EXTERNAL_READ_TIMEOUT: ${EXTERNAL_READ_TIMEOUT:-120}
       MAX_PDF_BYTES: ${MAX_PDF_BYTES:-52428800}
-
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-
-  bulk-downloader:
-    build:
-      context: ./downloader
-    command: ["python", "bulk_download_pdfs.py"]
-    init: true
-    restart: "no"
-    volumes:
-      - ./data/pdfs:/data/pdfs
-      - ./data/metadata:/data/metadata
-      - ./data/logs:/data/logs
-    environment:
-      PYTHONUNBUFFERED: "1"
-      PDF_DIRECTORY: /data/pdfs
-      METADATA_DIRECTORY: /data/metadata
-      LOG_DIRECTORY: /data/logs
-      TARGET_COUNT: "10000"
-      PAGE_SIZE: "100"
-      START_PAGE: "1"
-      REQUEST_DELAY_SECONDS: "1"
-      PAGE_DELAY_SECONDS: "2"
-      
-  mysql:
-    image: mysql:8.4
-    container_name: trdizin-mysql
-    restart: unless-stopped
-    ports:
-      - "127.0.0.1:3306:3306"
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-    volumes:
-      - ./data/mysql:/var/lib/mysql
-      - ./database/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test:
-        [
-          "CMD-SHELL",
-          "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD --silent"
-        ]
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)
       interval: 10s
       timeout: 5s
-      retries: 20
-      start_period: 30s
-      
-  db-importer:
-    build:
-      context: ./database/importer
-    depends_on:
-      mysql:
-        condition: service_healthy
-    restart: "no"
-    volumes:
-      - ./data/metadata:/data/metadata:ro
-      - ./data/pdfs:/data/pdfs:ro
-    environment:
-      PYTHONUNBUFFERED: "1"
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      METADATA_DIRECTORY: /data/metadata/api-pages
-      PDF_DIRECTORY: /data/pdfs
-      IMPORT_START_PAGE: "1"
-      IMPORT_PAGE_LIMIT: "0"
-      
-  db-grobid-importer:
-    build:
-      context: ./database/importer
-    command: ["python", "import_grobid.py"]
-    depends_on:
-      mysql:
-        condition: service_healthy
-    restart: "no"
-    volumes:
-      - ./data/grobid-output:/data/grobid-output:ro
-    environment:
-      PYTHONUNBUFFERED: "1"
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      GROBID_OUTPUT_DIRECTORY: /data/grobid-output
-      GROBID_IMPORT_LIMIT: "0"
-      GROBID_IMPORT_ONLY_MISSING: "true"
-  grobid-worker:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile
-    container_name: trdizin-grobid-worker
-    depends_on:
-      grobid:
-        condition: service_started
-      mysql:
-        condition: service_healthy
-    init: true
-    restart: "no"
-    volumes:
-      - ./data/pdfs:/data/pdfs:ro
-      - ./data/grobid-output:/data/grobid-output
-      - ./data/logs:/data/logs
-    environment:
-      PYTHONUNBUFFERED: "1"
-
-      GROBID_URL: http://grobid:8070
-      PDF_DIRECTORY: /data/pdfs
-      OUTPUT_DIRECTORY: /data/grobid-output
-      LOG_DIRECTORY: /data/logs
-      PROCESS_LIMIT: "500"
-
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-
-      GROBID_OUTPUT_DIRECTORY: /data/grobid-output
-      GROBID_IMPORT_LIMIT: "0"
-      GROBID_IMPORT_ONLY_MISSING: "true"
-
-      BATCH_PAUSE_SECONDS: "5"
-      MAX_NO_PROGRESS_ROUNDS: "3"
-
-  api-pipeline-worker:
-    build:
-      context: .
-      dockerfile: worker/Dockerfile.api
-    depends_on:
-      grobid:
-        condition: service_started
-      mysql:
-        condition: service_healthy
-    init: true
-    restart: "no"
-    volumes:
-      - ./data/grobid-output:/data/grobid-output
-      - ./data/logs:/data/logs
-    environment:
-      PYTHONUNBUFFERED: "1"
-
-      GROBID_URL: http://grobid:8070
-      OUTPUT_DIRECTORY: /data/grobid-output
-      GROBID_OUTPUT_DIRECTORY: /data/grobid-output
-      LOG_DIRECTORY: /data/logs
-
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-
-      PIPELINE_SYNC_TARGET_COUNT: "0"
-      PIPELINE_SYNC_PAGE_SIZE: "10"
-      PIPELINE_SYNC_START_PAGE: "1"
-
-      PIPELINE_BATCH_SIZE: "3"
-      PIPELINE_MAX_ARTICLES: "10"
-      PIPELINE_PAUSE_SECONDS: "2"
-      PIPELINE_MAX_NO_PROGRESS_ROUNDS: "3"
-    command:
-      ["python", "run_api_pipeline.py"]
-
-  failed-grobid-classifier:
-    build:
-      context: ./processor
-    command:
-      ["python", "classify_failed_pdfs.py"]
-    depends_on:
-      grobid:
-        condition: service_started
-    restart: "no"
-    volumes:
-      - ./data/pdfs:/data/pdfs:ro
-      - ./data/grobid-output:/data/grobid-output
-      - ./data/logs:/data/logs
-    environment:
-      PYTHONUNBUFFERED: "1"
-      GROBID_URL: http://grobid:8070
-      PDF_DIRECTORY: /data/pdfs
-      OUTPUT_DIRECTORY: /data/grobid-output
-      LOG_DIRECTORY: /data/logs
-      REQUEST_DELAY_SECONDS: "0.5"
-
-  db-grobid-status-importer:
-    build:
-      context: ./database/importer
-    command: ["python", "import_failed_statuses.py"]
-    depends_on:
-      mysql:
-        condition: service_healthy
-    restart: "no"
-    volumes:
-      - ./data/logs:/data/logs:ro
-    environment:
-      PYTHONUNBUFFERED: "1"
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      FAILED_REPORT_PATH: /data/logs/failed_grobid_classification.csv
-
-  db-trdizin-reference-importer:
-    build:
-      context: ./database/importer
-    command: ["python", "import_trdizin_references.py"]
-    depends_on:
-      mysql:
-        condition: service_healthy
-    restart: "no"
-    environment:
-      PYTHONUNBUFFERED: "1"
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      TRDIZIN_REFERENCE_IMPORT_LIMIT: "0"
-      TRDIZIN_REFERENCE_BATCH_SIZE: "50"
-
-  db-reference-matcher:
-    build:
-      context: ./database/importer
-    command: ["python", "match_references.py"]
-    depends_on:
-      mysql:
-        condition: service_healthy
-    restart: "no"
-    environment:
-      PYTHONUNBUFFERED: "1"
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      MATCH_ARTICLE_LIMIT: "20"
-      TEXT_MATCH_THRESHOLD: "82"
-      MATCH_MARGIN: "3"
-
-  db-reference-matcher-full:
-    build:
-      context: ./database/importer
-    command: ["python", "match_references_full.py"]
-    depends_on:
-      mysql:
-        condition: service_healthy
-    restart: "no"
-    environment:
-      PYTHONUNBUFFERED: "1"
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "3306"
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-      MYSQL_USER: ${MYSQL_USER}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      FULL_MATCH_ARTICLE_LIMIT: "0"
-      TEXT_MATCH_THRESHOLD: "82"
-      MATCH_MARGIN: "3"
+      retries: 10
+      start_period: 10s
