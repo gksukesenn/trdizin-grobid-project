@@ -15,7 +15,9 @@ Tek FastAPI uygulaması içinde küçük bir modüler monolit kullanılır:
 - Adapter: TR Dizin ve GROBID HTTP ayrıntıları
 - Domain/application service: modeller, mapping ve saf matching
 
-Bu kapsam için Kafka, Celery, MySQL veya ayrı mikroservisler gerekli değildir.
+Kafka, Celery veya ayrı mikroservisler gerekli değildir. MySQL canlı verinin
+yerine geçmez; tekrar üretilebilir işlem geçmişi, cache, ground-truth ve deney
+metriklerini saklayan opsiyonel kalıcılık adapterıdır.
 
 ## PDF neden kaydedilmiyor?
 
@@ -26,12 +28,14 @@ temiz klon kişisel arşivlerden bağımsız çalışır.
 
 ## Docker'ın rolü
 
-Compose yalnız iki servis içerir:
+Compose servisleri:
 
 - `grobid`: kaynakça extraction servisi
 - `interface`: FastAPI backend ve HTML/JavaScript frontend
+- `mysql`: named volume üzerinde kalıcılık
+- `migrate`: versioned migration'ları uygulayıp çıkan tek-seferlik servis
 
-Interface, GROBID `/api/isalive` healthcheck'i başarılı olmadan başlatılmaz.
+Interface, GROBID ve MySQL healthy, migration başarılı olmadan başlatılmaz.
 
 ## Demo
 

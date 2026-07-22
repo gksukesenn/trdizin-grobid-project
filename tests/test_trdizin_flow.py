@@ -1,6 +1,7 @@
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -22,7 +23,9 @@ from trdizin_app.infrastructure.external.trdizin_http_client import (  # noqa: E
 )
 from trdizin_app.infrastructure.config.settings import load_settings  # noqa: E402
 from trdizin_app.presentation.api.routes.trdizin import create_trdizin_router  # noqa: E402
-from app import app as live_app  # noqa: E402
+import app as app_module  # noqa: E402
+from trdizin_app.application.ports.persistence import RepositoryUnavailableError  # noqa: E402
+from trdizin_app.application.use_cases.process_and_compare_trdizin_article import ProcessAndCompareTrDizinArticleUseCase  # noqa: E402
 
 
 class FakeGateway:
@@ -55,7 +58,10 @@ class FakeGateway:
 
 
 class FakeExtractor:
+    calls = 0
+
     def extract_references(self, pdf_content: bytes, filename: str) -> ExtractionResult:
+        self.calls += 1
         self.received = (pdf_content, filename)
         return ExtractionResult([{
             "reference_index": 1,
@@ -65,22 +71,95 @@ class FakeExtractor:
         }], "<TEI/>")
 
 
+class FakeRepository:
+    def __init__(self, cached=None, unavailable=False):
+        self.cached = cached
+        self.unavailable = unavailable
+        self.successes = []
+        self.failures = []
+
+    def find_compatible_success(self, *key):
+        self.key = key
+        if self.unavailable: raise RepositoryUnavailableError()
+        return self.cached
+
+    def save_success(self, *args):
+        if self.unavailable: raise RepositoryUnavailableError()
+        self.successes.append(args)
+        return len(self.successes)
+
+    def save_failure(self, *args):
+        self.failures.append(args)
+        return len(self.failures)
+
+
 class TrDizinFlowTests(unittest.TestCase):
     def test_live_app_health_has_no_archive_or_database_counts(self) -> None:
-        response = TestClient(live_app).get("/api/health")
+        alive = type("Response", (), {"ok": True, "text": "true"})()
+        with patch.object(app_module, "repository", None), patch.object(
+            app_module.requests, "get", return_value=alive
+        ):
+            response = TestClient(app_module.app).get("/api/health")
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json(), {"status": "ok"})
+        self.assertEqual(response.json()["status"], "ok")
+        self.assertEqual(response.json()["database"], "disabled")
 
         app_source = (Path(__file__).parents[1] / "interface/app.py").read_text(
             encoding="utf-8"
         ).lower()
-        settings_source = (
-            Path(__file__).parents[1]
-            / "interface/trdizin_app/infrastructure/config/settings.py"
-        ).read_text(encoding="utf-8").lower()
-        for forbidden in ("mysql", "sqlite", "data/pdfs", "grobid-output"):
+        for forbidden in ("sqlite", "data/pdfs", "grobid-output"):
             self.assertNotIn(forbidden, app_source)
-            self.assertNotIn(forbidden, settings_source)
+
+    def test_cache_hit_skips_grobid_and_force_creates_new_run(self) -> None:
+        cached = {"processing": {"cache_hit": True}}
+        repository = FakeRepository(cached=cached)
+        extractor = FakeExtractor()
+        use_case = ProcessAndCompareTrDizinArticleUseCase(
+            FakeGateway(), extractor, repository, "0.8.0", "matcher-v1"
+        )
+        self.assertIs(use_case.execute(1448395), cached)
+        self.assertEqual(extractor.calls, 0)
+        result = use_case.execute(1448395, force=True)
+        self.assertEqual(extractor.calls, 1)
+        self.assertTrue(result["processing"]["persisted"])
+        self.assertEqual(result["processing"]["processing_run_id"], 1)
+
+    def test_cache_key_versions_and_database_unavailable_fallback(self) -> None:
+        repository = FakeRepository(unavailable=True)
+        extractor = FakeExtractor()
+        result = ProcessAndCompareTrDizinArticleUseCase(
+            FakeGateway(), extractor, repository, "0.8.1", "matcher-v2",
+            {"consolidateCitations": "1"},
+        ).execute(1448395)
+        self.assertEqual(repository.key[1:], ("0.8.1", "matcher-v2", {"consolidateCitations": "1"}))
+        self.assertFalse(result["processing"]["persisted"])
+        self.assertEqual(extractor.calls, 1)
+
+    def test_different_grobid_or_algorithm_version_misses_cache(self) -> None:
+        class VersionedRepository(FakeRepository):
+            def find_compatible_success(self, publication_id, grobid, algorithm, parameters):
+                return {"processing": {"cache_hit": True}} if (
+                    grobid, algorithm
+                ) == ("0.8.0", "matcher-v1") else None
+        repository = VersionedRepository()
+        for grobid, algorithm in (("0.8.1", "matcher-v1"), ("0.8.0", "matcher-v2")):
+            extractor = FakeExtractor()
+            result = ProcessAndCompareTrDizinArticleUseCase(
+                FakeGateway(), extractor, repository, grobid, algorithm
+            ).execute(1448395)
+            self.assertFalse(result["processing"]["cache_hit"])
+            self.assertEqual(extractor.calls, 1)
+
+    def test_failed_process_is_recorded_without_hiding_error(self) -> None:
+        class FailingExtractor:
+            def extract_references(self, pdf_content, filename):
+                raise RuntimeError("grobid failed")
+        repository = FakeRepository()
+        with self.assertRaisesRegex(RuntimeError, "grobid failed"):
+            ProcessAndCompareTrDizinArticleUseCase(
+                FakeGateway(), FailingExtractor(), repository
+            ).execute(1448395)
+        self.assertEqual(len(repository.failures), 1)
 
     def test_maps_real_search_fields(self) -> None:
         article = TrDizinHttpClient._article_from_record({

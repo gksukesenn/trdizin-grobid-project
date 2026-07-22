@@ -735,6 +735,7 @@
         trdizinReferences: [],
         articleSessions: {},
         selectionToken: 0,
+        hydrationToken: 0,
     };
 
     const elements = {
@@ -836,7 +837,7 @@
             processed: "İşlendi",
             no_content: "No Content",
             ocr_required: "OCR gerekli",
-            not_processed: "İşlenmedi",
+            not_processed: "Henüz kontrol edilmedi",
         };
 
         return labels[status] || status || "Bilinmiyor";
@@ -870,6 +871,7 @@
     async function loadArticles(
         selectFirst = false
     ) {
+        const hydrationToken = ++state.hydrationToken;
         elements.articleList.innerHTML = `
             <div class="loading-state">
                 Makaleler yükleniyor…
@@ -897,11 +899,15 @@
             state.articles = data.items.map((article) => ({
                 ...article,
                 publication_year: article.year,
-                ...(state.articleSessions[article.publication_id] || {}),
             }));
 
             renderArticles();
             renderPagination();
+
+            await hydrateArticleSessions(
+                state.articles.map((article) => article.publication_id),
+                hydrationToken
+            );
 
             if (
                 selectFirst
@@ -917,6 +923,57 @@
                     ${escapeHtml(error.message)}
                 </div>
             `;
+        }
+    }
+
+
+    async function hydrateArticleSessions(publicationIds, hydrationToken) {
+        if (publicationIds.length === 0) return;
+        try {
+            const response = await fetch("/api/history/cache-status", {
+                method: "POST",
+                headers: {"Content-Type": "application/json"},
+                body: JSON.stringify({publication_ids: publicationIds}),
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            if (hydrationToken !== state.hydrationToken) return;
+            publicationIds.forEach((publicationId) => {
+                const sessionKey = String(publicationId);
+                const status = data.items?.[sessionKey] || {processed: false};
+                const previous = state.articleSessions[sessionKey] || {};
+                if (previous.isProcessing || previous.result) return;
+                state.articleSessions[sessionKey] = {
+                    ...previous,
+                    statusChecked: true,
+                    databaseAvailable: Boolean(data.database_available),
+                    processed: Boolean(status.processed),
+                    processingRunId: status.processing_run_id,
+                    cacheHit: Boolean(status.cache_hit),
+                    grobidVersion: status.grobid_version,
+                    algorithmVersion: status.algorithm_version,
+                    trdizin_reference_count: status.trdizin_reference_count,
+                    grobid_reference_count: status.grobid_reference_count,
+                    matched_count: status.matched_count,
+                    unmatched_trdizin_count: status.unmatched_trdizin_count,
+                    unmatched_grobid_count: status.unmatched_grobid_count,
+                    duration_ms: status.duration_ms,
+                };
+            });
+            renderArticles();
+        } catch (_error) {
+            if (hydrationToken !== state.hydrationToken) return;
+            publicationIds.forEach((publicationId) => {
+                const sessionKey = String(publicationId);
+                const previous = state.articleSessions[sessionKey] || {};
+                if (previous.isProcessing || previous.result) return;
+                state.articleSessions[sessionKey] = {
+                    ...previous,
+                    statusChecked: true,
+                    databaseAvailable: false,
+                };
+            });
+            renderArticles();
         }
     }
 
@@ -938,7 +995,7 @@
         elements.articleList.innerHTML =
             state.articles.map((article) => {
                 const session =
-                    state.articleSessions[article.publication_id] || {};
+                    state.articleSessions[String(article.publication_id)];
                 const activeClass =
                     Number(state.selectedId)
                     === Number(article.publication_id)
@@ -976,16 +1033,30 @@
                                 }
                             </span>
 
-                            ${session.isProcessing
+                            ${session?.isProcessing
                                 ? `<span>GROBID işleniyor...</span>`
-                                : session.processed
+                                : session?.processed
                                     ? `<span>İşlendi</span>`
-                                    : `<span>GROBID: İşlenmedi</span>`}
-                            ${session.trdizin_reference_count != null
+                                    : session?.processFailed
+                                        ? `<span>GROBID işlemi başarısız</span>`
+                                        : session?.statusChecked
+                                            ? session.databaseAvailable
+                                                ? `<span>Henüz işlenmedi</span>`
+                                                : `<span>Durum kontrol edilemedi</span>`
+                                            : `<span>Durum: Henüz kontrol edilmedi</span>`}
+                            ${session?.trdizin_reference_count != null
                                 ? `<span>TR Dizin: ${formatNumber(session.trdizin_reference_count)}</span>`
                                 : ""}
-                            ${session.processed
+                            ${session?.processed
                                 ? `<span>GROBID: ${formatNumber(session.grobid_reference_count)}</span><span>Eşleşen: ${formatNumber(session.matched_count)}</span>`
+                                : ""}
+                            ${session?.processed
+                                ? session.result && !session.cacheHit
+                                    ? `<span>Yeni işlendi</span>`
+                                    : `<span>Cache’de mevcut</span>`
+                                : ""}
+                            ${session?.processed && session?.processingRunId
+                                ? `<span>Run #${session.processingRunId}</span>`
                                 : ""}
                         </div>
                     </button>
@@ -1038,8 +1109,9 @@
 
     async function selectArticle(publicationId) {
         state.selectedId = Number(publicationId);
+        const sessionKey = String(publicationId);
         const selectionToken = ++state.selectionToken;
-        const cached = state.articleSessions[state.selectedId] || {};
+        const cached = state.articleSessions[sessionKey] || {};
         state.processResult = cached.result || null;
         state.trdizinReferences = cached.trdizinReferences || [];
 
@@ -1092,7 +1164,7 @@
                 : cached.processed
                     ? `GROBID: ${cached.grobid_reference_count} kaynakça • ${cached.matched_count} eşleşme • ${cached.duration_ms} ms`
                     : detail.has_pdf
-                        ? "GROBID: İşlenmedi"
+                        ? "Durum: Henüz kontrol edilmedi"
                         : "Bu makalenin PDF kaydı bulunmuyor.";
 
             if (detail.has_pdf) {
@@ -1112,8 +1184,8 @@
                 || state.selectedId !== Number(publicationId)
             ) return;
             state.trdizinReferences = referenceData.references;
-            const currentSession = state.articleSessions[state.selectedId] || {};
-            state.articleSessions[state.selectedId] = {
+            const currentSession = state.articleSessions[sessionKey] || {};
+            state.articleSessions[sessionKey] = {
                 ...currentSession,
                 has_pdf: detail.has_pdf,
                 trdizin_reference_count: referenceData.reference_count,
@@ -1128,7 +1200,7 @@
 
             if (
                 detail.has_pdf
-                && !currentSession.processed
+                && !currentSession.result
                 && !currentSession.isProcessing
             ) {
                 processSelectedArticle(false);
@@ -1148,11 +1220,11 @@
     }
 
     function renderArticleCounters(detail) {
-        const session = state.articleSessions[state.selectedId] || {};
+        const session = state.articleSessions[String(state.selectedId)] || {};
         elements.articleCounters.innerHTML = `
             <div class="counter"><strong>${detail.has_pdf ? "Var" : "Yok"}</strong><span>TR Dizin PDF</span></div>
             <div class="counter"><strong>${session.trdizin_reference_count == null ? "…" : formatNumber(session.trdizin_reference_count)}</strong><span>TR Dizin kaynakça</span></div>
-            <div class="counter"><strong>${session.processed ? formatNumber(session.grobid_reference_count) : "İşlenmedi"}</strong><span>GROBID kaynakça</span></div>
+            <div class="counter"><strong>${session.processed ? formatNumber(session.grobid_reference_count) : "Kontrol edilmedi"}</strong><span>GROBID kaynakça</span></div>
             <div class="counter"><strong>${session.processed ? formatNumber(session.matched_count) : "—"}</strong><span>Eşleşen</span></div>
         `;
     }
@@ -1188,9 +1260,10 @@
     async function processSelectedArticle(force = false) {
         if (!state.selectedId) return;
         const publicationId = state.selectedId;
-        const previousSession = state.articleSessions[publicationId] || {};
+        const sessionKey = String(publicationId);
+        const previousSession = state.articleSessions[sessionKey] || {};
         if (previousSession.isProcessing) return;
-        if (previousSession.processed && !force) {
+        if (previousSession.processed && previousSession.result && !force) {
             state.processResult = previousSession.result;
             state.view = "comparison";
             elements.viewSelect.value = state.view;
@@ -1198,9 +1271,10 @@
             await loadSelectedView();
             return;
         }
-        state.articleSessions[publicationId] = {
+        state.articleSessions[sessionKey] = {
             ...previousSession,
             isProcessing: true,
+            processFailed: false,
         };
         renderArticles();
         elements.processButton.disabled = true;
@@ -1209,7 +1283,7 @@
         elements.contentPanel.innerHTML = `<div class="loading-state">GROBID işlemi sürüyor…</div>`;
         try {
             const response = await fetch(
-                `/api/trdizin/articles/${publicationId}/process-and-compare`,
+                `/api/trdizin/articles/${publicationId}/process-and-compare?force=${force}`,
                 {method: "POST"}
             );
             if (!response.ok) {
@@ -1218,25 +1292,36 @@
             }
             const result = await response.json();
             const p = result.processing;
-            state.articleSessions[publicationId] = {
-                ...previousSession,
+            const latestSession =
+                state.articleSessions[sessionKey] || previousSession;
+            state.articleSessions[sessionKey] = {
+                ...latestSession,
                 processed: true,
                 isProcessing: false,
+                statusChecked: true,
+                processFailed: false,
                 trdizin_reference_count: p.trdizin_reference_count,
                 grobid_reference_count: p.grobid_reference_count,
                 matched_count: p.matched_count,
                 unmatched_trdizin_count: p.unmatched_trdizin_count,
                 unmatched_grobid_count: p.unmatched_grobid_count,
                 duration_ms: p.duration_ms,
+                processingRunId: p.processing_run_id,
+                cacheHit: Boolean(p.cache_hit),
                 trdizinReferences: result.trdizin_references,
                 result,
             };
+            // Session state ve sol makale kartı aynı response ile eşzamanlı güncellenir.
             renderArticles();
             if (state.selectedId === publicationId) {
                 state.processResult = result;
                 elements.processStatus.textContent =
                     `GROBID: ${p.grobid_reference_count} kaynakça • ` +
-                    `${p.matched_count} eşleşme • ${p.duration_ms} ms`;
+                    `${p.matched_count} eşleşme • ${p.duration_ms} ms • ` +
+                    `${p.cache_hit ? "Cache’den geldi" : "Yeni işlendi"}` +
+                    `${p.processing_run_id ? ` • Run #${p.processing_run_id}` : ""}` +
+                    ` • GROBID ${p.grobid_version} • Algoritma ${p.algorithm_version}` +
+                    `${p.persisted ? "" : " • Kalıcılık kullanılamadı"}`;
                 elements.processButton.textContent = "Yeniden işle";
                 renderArticleCounters(result.article);
                 state.view = "comparison";
@@ -1244,9 +1329,11 @@
                 await loadSelectedView();
             }
         } catch (error) {
-            state.articleSessions[publicationId] = {
+            state.articleSessions[sessionKey] = {
                 ...previousSession,
                 isProcessing: false,
+                statusChecked: true,
+                processFailed: !previousSession.processed,
             };
             renderArticles();
             if (state.selectedId === publicationId) {

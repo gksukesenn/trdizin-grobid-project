@@ -80,3 +80,40 @@ selectArticle()
 
 Muhtemel hata noktaları: TR Dizin timeout/response değişikliği, PDF olmayan
 makale, maksimum PDF boyutu, GROBID readiness/timeout ve geçersiz TEI.
+
+## 3. Cache miss
+
+```text
+process-and-compare route
+→ ProcessAndCompareTrDizinArticleUseCase.execute(force=False)
+→ ProcessingResultRepository.find_compatible_success()
+→ TR Dizin article/PDF
+→ GrobidHttpClient
+→ reference mapper + matcher
+→ MySqlRepositories.save_success() transaction
+→ response (cache_hit=false, persisted=true)
+```
+
+Breakpointler: `process_and_compare_trdizin_article.py` içindeki cache sorgusu,
+`repositories.py` içindeki `save_success()` ve transaction cursor'u. İzlenecek
+değerler: `grobid_version`, `algorithm_version`, `grobid_parameters`, `run_id`.
+
+## 4. Cache hit
+
+```text
+process-and-compare route
+→ ProcessAndCompareTrDizinArticleUseCase
+→ ProcessingResultRepository
+→ processing_runs + extracted_references + comparison_matches
+→ yeniden oluşturulan response
+```
+
+Bu yolda TR Dizin PDF ve GROBID çağrılmaz. `processing.cache_hit=true` ve önceki
+`processing_run_id` döner. `force=true` cache sorgusunu atlayarak yeni run açar.
+
+## 5. Degraded persistence
+
+MySQL bağlantısı kurulamazsa repository `RepositoryUnavailableError` üretir.
+Use case cache/persist adımlarını atlar fakat TR Dizin → GROBID → matcher akışını
+sürdürür. Response `persisted=false`, `/api/health` ise `degraded` döner. SQL
+hatası kullanıcıya verilmez; ayrıntı server logunda tutulur.

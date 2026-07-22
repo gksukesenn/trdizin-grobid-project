@@ -48,6 +48,11 @@ class CompareProcessingResponse(BaseModel):
     matched_count: int
     unmatched_trdizin_count: int
     unmatched_grobid_count: int
+    cache_hit: bool = False
+    processing_run_id: int | None = None
+    grobid_version: str = "unknown"
+    algorithm_version: str = "unknown"
+    persisted: bool = False
 
 
 class ProcessAndCompareResponse(BaseModel):

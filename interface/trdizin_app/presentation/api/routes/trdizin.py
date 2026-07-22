@@ -30,6 +30,7 @@ def create_trdizin_router(
     settings: Settings,
     gateway: TrDizinGateway | None = None,
     extractor: ReferenceExtractor | None = None,
+    repository=None,
 ) -> APIRouter:
     gateway = gateway or TrDizinHttpClient(
         settings.trdizin_base_url,
@@ -47,7 +48,10 @@ def create_trdizin_router(
     process_use_case = ProcessTrDizinArticleUseCase(gateway, extractor)
     references_use_case = GetTrDizinReferencesUseCase(gateway)
     stream_pdf_use_case = StreamTrDizinPdfUseCase(gateway)
-    compare_use_case = ProcessAndCompareTrDizinArticleUseCase(gateway, extractor)
+    compare_use_case = ProcessAndCompareTrDizinArticleUseCase(
+        gateway, extractor, repository, settings.grobid_version,
+        settings.algorithm_version,
+    )
     router = APIRouter(prefix="/api/trdizin/articles", tags=["TR Dizin"])
 
     @router.get("/search", response_model=SearchResponse)
@@ -130,9 +134,9 @@ def create_trdizin_router(
             raise HTTPException(status_code=502, detail=str(error)) from error
 
     @router.post("/{publication_id}/process-and-compare", response_model=ProcessAndCompareResponse)
-    def process_and_compare(publication_id: int) -> dict:
+    def process_and_compare(publication_id: int, force: bool = False) -> dict:
         try:
-            return compare_use_case.execute(publication_id)
+            return compare_use_case.execute(publication_id, force=force)
         except ArticleNotFoundError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except ValueError as error:
