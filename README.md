@@ -109,7 +109,8 @@ flowchart LR
 trdizin-grobid-project/
 ├── database/
 │   ├── init/
-│   │   └── 001_schema.sql
+│   │   ├── 001_schema.sql
+│   │   └── 002_reference_matching_progress.sql
 │   ├── importer/
 │   │   ├── import_articles.py
 │   │   ├── import_failed_statuses.py
@@ -175,6 +176,7 @@ trdizin-grobid-project/
 | `db-importer`                   | TR Dizin makale metadata kayıtlarını MySQL’e aktarır                        |
 | `db-grobid-importer`            | GROBID TEI XML sonuçlarını MySQL’e aktarır                                  |
 | `db-trdizin-reference-importer` | TR Dizin kaynakça kayıtlarını veritabanına aktarır                          |
+| `db-exact-doi-matcher`          | DOI değerlerini normalize edip kesin eşleşmeleri `comparison_results`'a yazar |
 | `db-reference-matcher`          | Sınırlı sayıda makalede kaynakça eşleştirme testi yapar                     |
 | `db-reference-matcher-full`     | Uygun makalelerin tamamında kaynakça eşleştirmesi yapar                     |
 | `failed-grobid-classifier`      | Başarısız veya OCR gerektiren PDF dosyalarını sınıflandırır                 |
@@ -329,6 +331,12 @@ TR Dizin kaynakçalarını veritabanına aktarmak için:
 docker compose run --rm db-trdizin-reference-importer
 ```
 
+Kesin DOI eşleşmelerini `comparison_results` tablosuna işlemek için (metin benzerliği eşleştirmesinden önce çalıştırılmalıdır):
+
+```bash
+docker compose run --rm db-exact-doi-matcher
+```
+
 Sınırlı sayıda makalede eşleştirme testi yapmak için:
 
 ```bash
@@ -357,6 +365,12 @@ PDF dosyalarını gruplar hâlinde GROBID ile işlemek ve sonuçları MySQL’e 
 docker compose run --rm grobid-worker
 ```
 
+Kesin DOI eşleşmelerini güncellemek için (yeni indirilen makaleler eklendikten sonra tekrar çalıştırılabilir):
+
+```bash
+docker compose run --rm db-exact-doi-matcher
+```
+
 Tam kaynakça eşleştirme işlemi:
 
 ```bash
@@ -371,7 +385,7 @@ Kaynakça eşleştirme işlemi iki temel aşamada gerçekleştirilir.
 
 ### 1. Kesin DOI eşleştirmesi
 
-TR Dizin ve GROBID kaynakçalarında bulunan DOI değerleri normalize edilerek karşılaştırılır. Aynı DOI değerine sahip kayıtlar kesin eşleşme olarak değerlendirilir.
+TR Dizin ve GROBID kaynakçalarında bulunan DOI değerleri normalize edilerek karşılaştırılır. Aynı DOI değerine sahip kayıtlar kesin eşleşme olarak değerlendirilir. Bu adım `db-exact-doi-matcher` servisi tarafından (`database/002_insert_exact_doi_matches.sql` çalıştırılarak) gerçekleştirilir ve metin benzerliği eşleştirmesinden (`db-reference-matcher` / `db-reference-matcher-full`) önce çalıştırılmalıdır.
 
 ### 2. Metin benzerliği eşleştirmesi
 
