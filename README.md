@@ -525,3 +525,68 @@ Projenin mevcut sürümünde:
 * PDF ve karşılaştırma sonuçlarını gösteren web arayüzü geliştirildi.
 
 Proje aktif olarak geliştirilmektedir.
+# Temiz Klon Sunum Kurulumu
+
+Bu proje canlı TR Dizin API'sinde makale arar, seçilen yayının PDF'sini belleğe alır ve doğrudan GROBID'e gönderir. Ana sunum akışı önceden indirilmiş PDF/XML/metadata veya dolu MySQL gerektirmez. Eski batch ve karşılaştırma araçları araştırma kullanımı için korunmuştur.
+
+## Gereksinimler
+
+- Git
+- Docker Engine ve Docker Compose v2
+- TR Dizin'e internet erişimi
+- İlk image indirmeleri için yaklaşık birkaç GB boş alan (GROBID image'ı büyüktür)
+
+## Klonlama ve ortam ayarı
+
+```bash
+git clone <repository-url>
+cd trdizin-grobid-project
+cp .env.example .env
+```
+
+`.env.example` yalnızca yerel geliştirme varsayılanları içerir. `.env` commit edilmez; production parolalarını burada verilen örneklerle kullanmayın.
+
+## Docker ile çalıştırma
+
+```bash
+docker compose up -d --build mysql grobid interface
+```
+
+Arayüz: http://localhost:8000 — GROBID: http://localhost:8070
+
+## Sağlık ve API testleri
+
+```bash
+curl --fail http://localhost:8000/api/health
+curl --fail "http://localhost:8000/api/trdizin/articles/search?page=1&limit=10"
+curl --fail "http://localhost:8000/api/trdizin/articles/1448395"
+curl --fail "http://localhost:8000/api/trdizin/articles/1448395/references"
+curl --fail --range 0-1023 \
+  "http://localhost:8000/api/trdizin/articles/1448395/pdf" -o /tmp/article.part
+curl --fail -X POST \
+  "http://localhost:8000/api/trdizin/articles/1448395/process-and-compare"
+```
+
+Son komut TR Dizin ve GROBID canlı servislerini kullanır; ağ ve makale boyutuna göre sürebilir. Response içinde iki kaynakça listesi, `comparison` ve `tei_xml` bulunur. PDF `data/pdfs` altına, TEI de `data/grobid-output` altına yazılmaz.
+
+## Log, durdurma ve debug
+
+```bash
+docker compose logs -f interface grobid
+docker compose stop interface grobid mysql
+```
+
+Kod değişiklikleriyle debug etmek için interface'i yerelde veya IDE içinde `interface/app.py:app` üzerinden Uvicorn ile çalıştırın; `GROBID_URL=http://localhost:8070` ayarlayın. Önerilen breakpoint ve değişkenler [DEBUG_AKIS_REHBERI.md](DEBUG_AKIS_REHBERI.md) dosyasındadır. Sunum özeti için [SUNUM_NOTLARI.md](SUNUM_NOTLARI.md) dosyasına bakın.
+
+## Sunum API mimarisi
+
+```text
+FastAPI route → use case → port ← HTTP adapter
+```
+
+- Route: HTTP doğrulaması ve hata/status dönüşümü
+- Use case: arama, detay ve PDF → GROBID iş akışı
+- Port: dış servislerden bağımsız sözleşme
+- Adapter: TR Dizin/GROBID URL, HTTP, timeout, retry ve response ayrıştırma
+
+---

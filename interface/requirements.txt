@@ -2,3 +2,5 @@ fastapi
 uvicorn
 mysql-connector-python
 requests
+rapidfuzz
+httpx

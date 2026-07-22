@@ -563,21 +563,12 @@
 <div class="app">
     <header class="topbar">
         <div class="brand">
-            <h1>TR Dizin – GROBID Karşılaştırma</h1>
+            <h1>TR Dizin – GROBID Canlı Kaynakça</h1>
             <p>
-                PDF, TR Dizin verileri, GROBID sonuçları
-                ve kaynakça eşleştirmeleri
+                Canlı TR Dizin makalesini kalıcı PDF oluşturmadan GROBID ile işler
             </p>
         </div>
 
-        <div
-            id="healthStats"
-            class="health-stats"
-        >
-            <span class="health-stat">
-                Sistem kontrol ediliyor…
-            </span>
-        </div>
     </header>
 
     <section class="toolbar">
@@ -585,12 +576,13 @@
             id="searchInput"
             class="control"
             type="search"
-            placeholder="Yayın kodu, başlık, DOI veya dergi ara"
+            placeholder="TR Dizin'de yayın kodu, başlık, DOI veya dergi ara"
         >
 
         <select
             id="statusFilter"
             class="control"
+            hidden
         >
             <option value="">
                 Tüm GROBID durumları
@@ -678,15 +670,18 @@
             <div class="split-view">
                 <section class="panel">
                     <div class="panel-header">
-                        <strong>Orijinal PDF</strong>
-                        <span id="pdfLabel"></span>
+                        <strong>Canlı PDF</strong>
+                        <span id="pdfLabel">PDF diske kaydedilmez</span>
                     </div>
-
-                    <iframe
-                        id="pdfFrame"
-                        class="pdf-frame"
-                        title="Makale PDF"
-                    ></iframe>
+                    <div style="min-height:0; display:grid; grid-template-rows:auto auto 1fr;">
+                        <button id="processButton" class="primary-button" type="button" disabled style="margin:10px;">
+                            GROBID ile işle ve karşılaştır
+                        </button>
+                        <div id="processStatus" class="empty-state" style="margin:0 10px 10px; padding:10px;">
+                            Önce bir makale seçin.
+                        </div>
+                        <iframe id="pdfFrame" class="pdf-frame" title="Canlı makale PDF"></iframe>
+                    </div>
                 </section>
 
                 <section class="panel">
@@ -698,16 +693,13 @@
                             class="view-select"
                         >
                             <option value="comparison">
-                                Karşılaştırma sonuçları
+                                Karşılaştırma
                             </option>
                             <option value="trdizin-references">
                                 TR Dizin kaynakçaları
                             </option>
                             <option value="grobid-references">
                                 GROBID kaynakçaları
-                            </option>
-                            <option value="trdizin-json">
-                                TR Dizin ham JSON
                             </option>
                             <option value="grobid-tei">
                                 GROBID ham TEI XML
@@ -738,13 +730,14 @@
         total: 0,
         selectedId: null,
         articles: [],
-        view: "comparison",
+        view: "trdizin-references",
+        processResult: null,
+        trdizinReferences: [],
+        articleSessions: {},
+        selectionToken: 0,
     };
 
     const elements = {
-        healthStats:
-            document.getElementById("healthStats"),
-
         searchInput:
             document.getElementById("searchInput"),
 
@@ -783,6 +776,12 @@
 
         pdfLabel:
             document.getElementById("pdfLabel"),
+
+        processButton:
+            document.getElementById("processButton"),
+
+        processStatus:
+            document.getElementById("processStatus"),
 
         viewSelect:
             document.getElementById("viewSelect"),
@@ -868,55 +867,6 @@
     }
 
 
-    async function loadHealth() {
-        try {
-            const data =
-                await fetchJson("/api/health");
-
-            elements.healthStats.innerHTML = `
-                <span class="health-stat">
-                    Makale:
-                    <strong>
-                        ${formatNumber(data.article_count)}
-                    </strong>
-                </span>
-
-                <span class="health-stat">
-                    PDF:
-                    <strong>
-                        ${formatNumber(data.pdf_file_count)}
-                    </strong>
-                </span>
-
-                <span class="health-stat">
-                    GROBID:
-                    <strong>
-                        ${formatNumber(
-                            data.processed_document_count
-                        )}
-                    </strong>
-                </span>
-
-                <span class="health-stat">
-                    Karşılaştırılan:
-                    <strong>
-                        ${formatNumber(
-                            data.matched_article_count
-                        )}
-                    </strong>
-                </span>
-            `;
-        } catch (error) {
-            elements.healthStats.innerHTML = `
-                <span class="health-stat">
-                    Sistem bilgisi alınamadı:
-                    ${escapeHtml(error.message)}
-                </span>
-            `;
-        }
-    }
-
-
     async function loadArticles(
         selectFirst = false
     ) {
@@ -935,12 +885,20 @@
             });
 
         try {
+            const page = Math.floor(state.offset / state.limit) + 1;
+            parameters.set("page", String(page));
+            parameters.delete("processing_status");
+            parameters.delete("offset");
             const data = await fetchJson(
-                `/api/articles/search?${parameters}`
+                `/api/trdizin/articles/search?${parameters}`
             );
 
             state.total = data.total;
-            state.articles = data.articles;
+            state.articles = data.items.map((article) => ({
+                ...article,
+                publication_year: article.year,
+                ...(state.articleSessions[article.publication_id] || {}),
+            }));
 
             renderArticles();
             renderPagination();
@@ -979,6 +937,8 @@
 
         elements.articleList.innerHTML =
             state.articles.map((article) => {
+                const session =
+                    state.articleSessions[article.publication_id] || {};
                 const activeClass =
                     Number(state.selectedId)
                     === Number(article.publication_id)
@@ -1016,23 +976,17 @@
                                 }
                             </span>
 
-                            <span>
-                                ${
-                                    escapeHtml(
-                                        statusLabel(
-                                            article.processing_status
-                                        )
-                                    )
-                                }
-                            </span>
-
-                            <span>
-                                ${
-                                    formatNumber(
-                                        article.reference_count
-                                    )
-                                } kaynakça
-                            </span>
+                            ${session.isProcessing
+                                ? `<span>GROBID işleniyor...</span>`
+                                : session.processed
+                                    ? `<span>İşlendi</span>`
+                                    : `<span>GROBID: İşlenmedi</span>`}
+                            ${session.trdizin_reference_count != null
+                                ? `<span>TR Dizin: ${formatNumber(session.trdizin_reference_count)}</span>`
+                                : ""}
+                            ${session.processed
+                                ? `<span>GROBID: ${formatNumber(session.grobid_reference_count)}</span><span>Eşleşen: ${formatNumber(session.matched_count)}</span>`
+                                : ""}
                         </div>
                     </button>
                 `;
@@ -1084,6 +1038,10 @@
 
     async function selectArticle(publicationId) {
         state.selectedId = Number(publicationId);
+        const selectionToken = ++state.selectionToken;
+        const cached = state.articleSessions[state.selectedId] || {};
+        state.processResult = cached.result || null;
+        state.trdizinReferences = cached.trdizinReferences || [];
 
         renderArticles();
 
@@ -1095,8 +1053,12 @@
 
         try {
             const detail = await fetchJson(
-                `/api/articles/${state.selectedId}`
+                `/api/trdizin/articles/${state.selectedId}`
             );
+            if (
+                selectionToken !== state.selectionToken
+                || state.selectedId !== Number(publicationId)
+            ) return;
 
             elements.articleTitle.textContent =
                 detail.title
@@ -1104,11 +1066,11 @@
 
             const metadata = [
                 `Yayın kodu: ${detail.publication_id}`,
-                detail.publication_year
-                    ? `Yıl: ${detail.publication_year}`
+                detail.year
+                    ? `Yıl: ${detail.year}`
                     : "",
-                detail.journal_name
-                    ? `Dergi: ${detail.journal_name}`
+                detail.journal
+                    ? `Dergi: ${detail.journal}`
                     : "",
                 detail.doi
                     ? `DOI: ${detail.doi}`
@@ -1118,61 +1080,65 @@
             elements.articleMetadata.textContent =
                 metadata.join(" • ");
 
-            elements.articleCounters.innerHTML = `
-                <div class="counter">
-                    <strong>
-                        ${
-                            formatNumber(
-                                detail.trdizin_reference_count
-                            )
-                        }
-                    </strong>
-                    <span>TR Dizin</span>
-                </div>
+            renderArticleCounters(detail);
+            elements.processButton.disabled = !detail.has_pdf || Boolean(cached.isProcessing);
+            elements.processButton.textContent = cached.isProcessing
+                ? "GROBID işleniyor..."
+                : cached.processed
+                    ? "Yeniden işle"
+                    : "GROBID ile işle ve karşılaştır";
+            elements.processStatus.textContent = cached.isProcessing
+                ? "GROBID işleniyor..."
+                : cached.processed
+                    ? `GROBID: ${cached.grobid_reference_count} kaynakça • ${cached.matched_count} eşleşme • ${cached.duration_ms} ms`
+                    : detail.has_pdf
+                        ? "GROBID: İşlenmedi"
+                        : "Bu makalenin PDF kaydı bulunmuyor.";
 
-                <div class="counter">
-                    <strong>
-                        ${
-                            formatNumber(
-                                detail.grobid_reference_count
-                            )
-                        }
-                    </strong>
-                    <span>GROBID</span>
-                </div>
+            if (detail.has_pdf) {
+                elements.pdfFrame.src =
+                    `/api/trdizin/articles/${state.selectedId}/pdf#view=FitH`;
+                elements.pdfLabel.textContent = `${state.selectedId}.pdf yükleniyor…`;
+            } else {
+                elements.pdfFrame.removeAttribute("src");
+                elements.pdfLabel.textContent = "PDF bulunamadı";
+            }
 
-                <div class="counter">
-                    <strong>
-                        ${
-                            formatNumber(
-                                detail.doi_match_count
-                            )
-                        }
-                    </strong>
-                    <span>DOI eşleşmesi</span>
-                </div>
-
-                <div class="counter">
-                    <strong>
-                        ${
-                            formatNumber(
-                                detail.text_match_count
-                            )
-                        }
-                    </strong>
-                    <span>Metin eşleşmesi</span>
-                </div>
-            `;
-
-            elements.pdfFrame.src =
-                `/pdfs/${state.selectedId}.pdf#view=FitH`;
-
-            elements.pdfLabel.textContent =
-                `${state.selectedId}.pdf`;
+            const referenceData = await fetchJson(
+                `/api/trdizin/articles/${state.selectedId}/references`
+            );
+            if (
+                selectionToken !== state.selectionToken
+                || state.selectedId !== Number(publicationId)
+            ) return;
+            state.trdizinReferences = referenceData.references;
+            const currentSession = state.articleSessions[state.selectedId] || {};
+            state.articleSessions[state.selectedId] = {
+                ...currentSession,
+                has_pdf: detail.has_pdf,
+                trdizin_reference_count: referenceData.reference_count,
+                trdizinReferences: referenceData.references,
+            };
+            renderArticles();
+            renderArticleCounters(detail);
+            state.view = state.processResult ? "comparison" : "trdizin-references";
+            elements.viewSelect.value = state.view;
 
             await loadSelectedView();
 
+            if (
+                detail.has_pdf
+                && !currentSession.processed
+                && !currentSession.isProcessing
+            ) {
+                processSelectedArticle(false);
+            }
+
         } catch (error) {
+            if (
+                selectionToken !== state.selectionToken
+                || state.selectedId !== Number(publicationId)
+            ) return;
             elements.contentPanel.innerHTML = `
                 <div class="error-state">
                     ${escapeHtml(error.message)}
@@ -1181,122 +1147,151 @@
         }
     }
 
+    function renderArticleCounters(detail) {
+        const session = state.articleSessions[state.selectedId] || {};
+        elements.articleCounters.innerHTML = `
+            <div class="counter"><strong>${detail.has_pdf ? "Var" : "Yok"}</strong><span>TR Dizin PDF</span></div>
+            <div class="counter"><strong>${session.trdizin_reference_count == null ? "…" : formatNumber(session.trdizin_reference_count)}</strong><span>TR Dizin kaynakça</span></div>
+            <div class="counter"><strong>${session.processed ? formatNumber(session.grobid_reference_count) : "İşlenmedi"}</strong><span>GROBID kaynakça</span></div>
+            <div class="counter"><strong>${session.processed ? formatNumber(session.matched_count) : "—"}</strong><span>Eşleşen</span></div>
+        `;
+    }
+
 
     async function loadSelectedView() {
         if (!state.selectedId) {
             return;
         }
 
-        elements.contentPanel.innerHTML = `
-            <div class="loading-state">
-                Veri yükleniyor…
-            </div>
-        `;
+        if (state.view === "trdizin-references") {
+            renderReferences({references: state.trdizinReferences, reference_count: state.trdizinReferences.length}, "TR Dizin");
+            return;
+        }
+        if (!state.processResult) {
+            elements.contentPanel.innerHTML = `<div class="empty-state">Bu görünüm için önce GROBID ile işleyin.</div>`;
+            return;
+        }
+        if (state.view === "comparison") {
+            renderLiveComparison(state.processResult);
+            return;
+        }
+        if (state.view === "grobid-tei") {
+            renderRawContent(state.processResult.tei_xml);
+            return;
+        }
+        renderReferences({
+            references: state.processResult.grobid_references,
+            reference_count: state.processResult.processing.grobid_reference_count,
+        }, "GROBID");
+    }
 
+    async function processSelectedArticle(force = false) {
+        if (!state.selectedId) return;
+        const publicationId = state.selectedId;
+        const previousSession = state.articleSessions[publicationId] || {};
+        if (previousSession.isProcessing) return;
+        if (previousSession.processed && !force) {
+            state.processResult = previousSession.result;
+            state.view = "comparison";
+            elements.viewSelect.value = state.view;
+            elements.processButton.textContent = "Yeniden işle";
+            await loadSelectedView();
+            return;
+        }
+        state.articleSessions[publicationId] = {
+            ...previousSession,
+            isProcessing: true,
+        };
+        renderArticles();
+        elements.processButton.disabled = true;
+        elements.processButton.textContent = "GROBID işleniyor...";
+        elements.processStatus.textContent = "GROBID işleniyor...";
+        elements.contentPanel.innerHTML = `<div class="loading-state">GROBID işlemi sürüyor…</div>`;
         try {
-            if (state.view === "comparison") {
-                const data = await fetchJson(
-                    `/api/articles/${
-                        state.selectedId
-                    }/comparison`
-                );
-
-                renderComparison(data);
-                return;
+            const response = await fetch(
+                `/api/trdizin/articles/${publicationId}/process-and-compare`,
+                {method: "POST"}
+            );
+            if (!response.ok) {
+                const data = await response.json().catch(() => ({}));
+                throw new Error(data.detail || `HTTP ${response.status}`);
             }
-
-            if (
-                state.view
-                === "trdizin-references"
-            ) {
-                const data = await fetchJson(
-                    `/api/articles/${
-                        state.selectedId
-                    }/trdizin-references`
-                );
-
-                renderReferences(
-                    data,
-                    "TR Dizin"
-                );
-
-                return;
-            }
-
-            if (
-                state.view
-                === "grobid-references"
-            ) {
-                const data = await fetchJson(
-                    `/api/articles/${
-                        state.selectedId
-                    }/grobid-references`
-                );
-
-                renderReferences(
-                    data,
-                    "GROBID"
-                );
-
-                return;
-            }
-
-            if (
-                state.view
-                === "trdizin-json"
-            ) {
-                const data = await fetchJson(
-                    `/api/articles/${
-                        state.selectedId
-                    }/trdizin-json`
-                );
-
-                renderRawContent(
-                    JSON.stringify(
-                        data.data,
-                        null,
-                        2
-                    )
-                );
-
-                return;
-            }
-
-            if (state.view === "grobid-tei") {
-                const response = await fetch(
-                    `/api/articles/${
-                        state.selectedId
-                    }/grobid-tei`
-                );
-
-                if (!response.ok) {
-                    let message =
-                        `HTTP ${response.status}`;
-
-                    try {
-                        const error =
-                            await response.json();
-
-                        message =
-                            error.detail || message;
-                    } catch (_error) {
-                        // XML olmayan hata.
-                    }
-
-                    throw new Error(message);
-                }
-
-                renderRawContent(
-                    await response.text()
-                );
+            const result = await response.json();
+            const p = result.processing;
+            state.articleSessions[publicationId] = {
+                ...previousSession,
+                processed: true,
+                isProcessing: false,
+                trdizin_reference_count: p.trdizin_reference_count,
+                grobid_reference_count: p.grobid_reference_count,
+                matched_count: p.matched_count,
+                unmatched_trdizin_count: p.unmatched_trdizin_count,
+                unmatched_grobid_count: p.unmatched_grobid_count,
+                duration_ms: p.duration_ms,
+                trdizinReferences: result.trdizin_references,
+                result,
+            };
+            renderArticles();
+            if (state.selectedId === publicationId) {
+                state.processResult = result;
+                elements.processStatus.textContent =
+                    `GROBID: ${p.grobid_reference_count} kaynakça • ` +
+                    `${p.matched_count} eşleşme • ${p.duration_ms} ms`;
+                elements.processButton.textContent = "Yeniden işle";
+                renderArticleCounters(result.article);
+                state.view = "comparison";
+                elements.viewSelect.value = state.view;
+                await loadSelectedView();
             }
         } catch (error) {
-            elements.contentPanel.innerHTML = `
-                <div class="error-state">
-                    ${escapeHtml(error.message)}
-                </div>
-            `;
+            state.articleSessions[publicationId] = {
+                ...previousSession,
+                isProcessing: false,
+            };
+            renderArticles();
+            if (state.selectedId === publicationId) {
+                state.processResult = previousSession.result || null;
+                elements.processStatus.textContent =
+                    `GROBID işlemi başarısız: ${error.message}`;
+                elements.processButton.textContent = "Tekrar dene";
+                if (state.processResult) {
+                    await loadSelectedView();
+                } else {
+                    elements.contentPanel.innerHTML = `<div class="error-state">${escapeHtml(error.message)}</div>`;
+                }
+            }
+        } finally {
+            if (state.selectedId === publicationId) {
+                elements.processButton.disabled = false;
+            }
         }
+    }
+
+    function renderLiveComparison(data) {
+        const p = data.processing;
+        const rows = data.comparison.matches.map((match) => `
+            <article class="comparison-card">
+                <div class="card-top">
+                    <span class="status-badge ${comparisonClass(match.status)}">${escapeHtml(comparisonStatus(match.status))}</span>
+                    <span class="detail-tag">Skor: ${Number(match.score).toFixed(1)}</span>
+                </div>
+                <div class="comparison-columns">
+                    <div class="comparison-side"><strong>TR Dizin #${match.trdizin_reference.reference_index}</strong><div class="reference-text">${escapeHtml(match.trdizin_reference.raw_reference)}</div></div>
+                    <div class="comparison-side"><strong>GROBID #${match.grobid_reference.reference_index}</strong><div class="reference-text">${escapeHtml(match.grobid_reference.raw_reference)}</div></div>
+                </div>
+            </article>`).join("");
+        const unmatched = [
+            ...data.comparison.unmatched_trdizin.map((ref) => `<article class="reference-card"><span class="status-badge status-unmatched">Eşleşmeyen TR Dizin</span><div class="reference-text">${escapeHtml(ref.raw_reference)}</div></article>`),
+            ...data.comparison.unmatched_grobid.map((ref) => `<article class="reference-card"><span class="status-badge status-unmatched">Eşleşmeyen GROBID</span><div class="reference-text">${escapeHtml(ref.raw_reference)}</div></article>`),
+        ].join("");
+        elements.contentPanel.innerHTML = `
+            <div class="summary-grid">
+                <div class="summary-card"><strong>${p.trdizin_reference_count}</strong><span>TR Dizin</span></div>
+                <div class="summary-card"><strong>${p.grobid_reference_count}</strong><span>GROBID</span></div>
+                <div class="summary-card"><strong>${p.matched_count}</strong><span>Eşleşen</span></div>
+                <div class="summary-card"><strong>${p.unmatched_trdizin_count}</strong><span>Eşleşmeyen TR Dizin</span></div>
+                <div class="summary-card"><strong>${p.unmatched_grobid_count}</strong><span>Eşleşmeyen GROBID</span></div>
+            </div>${rows || `<div class="empty-state">Eşleşme bulunamadı.</div>`}${unmatched}`;
     }
 
 
@@ -1333,7 +1328,7 @@
                         <article class="reference-card">
                             <div class="card-top">
                                 <span class="card-index">
-                                    #${reference.index}
+                                    #${reference.reference_index}
                                 </span>
                             </div>
 
@@ -1653,6 +1648,22 @@
         runSearch
     );
 
+    elements.processButton.addEventListener(
+        "click",
+        () => processSelectedArticle(true)
+    );
+
+    elements.pdfFrame.addEventListener("load", () => {
+        if (state.selectedId) {
+            elements.pdfLabel.textContent = `${state.selectedId}.pdf — canlı stream`;
+        }
+    });
+
+    elements.pdfFrame.addEventListener("error", () => {
+        elements.pdfLabel.textContent = "PDF görüntülenemedi";
+        elements.processStatus.textContent = "PDF görüntüleyici yükleme hatası verdi.";
+    });
+
     elements.searchInput.addEventListener(
         "keydown",
         (event) => {
@@ -1704,7 +1715,6 @@
 
 
     async function initialize() {
-        await loadHealth();
         await loadArticles(true);
     }
 

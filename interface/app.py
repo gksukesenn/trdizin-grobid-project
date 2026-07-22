@@ -23,6 +23,9 @@ from trdizin_app.infrastructure.config.settings import (
 from trdizin_app.infrastructure.database.connection import (
     create_database_connection,
 )
+from trdizin_app.presentation.api.routes.trdizin import (
+    create_trdizin_router,
+)
 
 
 SETTINGS = load_settings()
@@ -38,6 +41,7 @@ app = FastAPI(
     title="TR Dizin – GROBID Karşılaştırma Arayüzü",
     version="1.0.0",
 )
+app.include_router(create_trdizin_router(SETTINGS))
 
 
 def get_connection():

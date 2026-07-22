@@ -73,6 +73,8 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      grobid:
+        condition: service_started
     volumes:
       - ./data/pdfs:/data/pdfs:ro
       - ./data/grobid-output:/data/grobid-output:ro
@@ -82,6 +84,11 @@ services:
       XML_DIRECTORY: /data/grobid-output
       METADATA_DIRECTORY: /data/metadata
       TEMPLATE_DIRECTORY: /app/templates
+      TRDIZIN_BASE_URL: ${TRDIZIN_BASE_URL:-https://search.trdizin.gov.tr}
+      GROBID_URL: http://grobid:8070
+      EXTERNAL_CONNECT_TIMEOUT: ${EXTERNAL_CONNECT_TIMEOUT:-10}
+      EXTERNAL_READ_TIMEOUT: ${EXTERNAL_READ_TIMEOUT:-120}
+      MAX_PDF_BYTES: ${MAX_PDF_BYTES:-52428800}
 
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
