@@ -249,6 +249,24 @@ services:
       TRDIZIN_REFERENCE_IMPORT_LIMIT: "0"
       TRDIZIN_REFERENCE_BATCH_SIZE: "50"
 
+  db-exact-doi-matcher:
+    image: mysql:8.4
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+    volumes:
+      - ./database/002_insert_exact_doi_matches.sql:/sql/002_insert_exact_doi_matches.sql:ro
+    entrypoint: ["sh", "-c"]
+    command:
+      - >
+        mysql -h mysql -P 3306 -u "$$MYSQL_USER" -p"$$MYSQL_PASSWORD"
+        "$$MYSQL_DATABASE" < /sql/002_insert_exact_doi_matches.sql
+    environment:
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+
   db-reference-matcher:
     build:
       context: ./database/importer
