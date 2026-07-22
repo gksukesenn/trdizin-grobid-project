@@ -56,3 +56,7 @@ deploy/huggingface/bundle/
 deploy/static-site/generated/
 deploy/static-site/.hf-upload-state.json
 deploy/github-pages/site/
+
+# GitHub Pages için üretilen statik veriler takip edilir.
+!docs/data/
+!docs/data/**
