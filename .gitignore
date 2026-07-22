@@ -53,3 +53,6 @@ Thumbs.db
 backups/
 deploy/huggingface/data/*.sqlite
 deploy/huggingface/bundle/
+deploy/static-site/generated/
+deploy/static-site/.hf-upload-state.json
+deploy/github-pages/site/
