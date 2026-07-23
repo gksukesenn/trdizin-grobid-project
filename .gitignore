@@ -46,7 +46,9 @@ venv/
 # Editör ve işletim sistemi dosyaları
 # --------------------------------------------------
 .idea/
-.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/extensions.json
 .DS_Store
 Thumbs.db
 *.backup

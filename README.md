@@ -23,6 +23,27 @@ Compose `mysql`, `migrate`, `grobid` ve `interface` servislerini yönetir.
 MySQL verisi `mysql_data` named volume'unda tutulur. PDF veya TEI volume'a ya
 da repository'ye yazılmaz.
 
+## VS Code ile debug
+
+Normal production davranışı için standart Compose komutunu kullanın:
+
+```bash
+docker compose up -d --build
+```
+
+Interface servisini `debugpy` ile başlatmak için debug override dosyasını
+standart Compose dosyasına ekleyin:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.debug.yml up -d --build
+```
+
+Ardından VS Code'da `FastAPI: Docker Remote Attach` yapılandırmasını başlatın.
+Debugger yalnız `127.0.0.1:5678` üzerinden erişilebilir. Uygulama debugger
+bağlantısını beklemeden başlar; kaynak değişiklikleri otomatik reload
+tetiklemez. Debug Compose katmanı yalnız `interface` servisini değiştirir;
+MySQL, migration ve GROBID standart yapılandırmayı kullanmaya devam eder.
+
 ## Sağlık ve canlı akış
 
 ```bash
