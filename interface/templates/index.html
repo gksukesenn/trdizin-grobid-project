@@ -90,6 +90,22 @@
             font-size: 13px;
         }
 
+        .annotator-box {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .annotator-box label {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .annotator-box input {
+            width: 180px;
+            height: 34px;
+        }
+
         .health-stats {
             display: flex;
             flex-wrap: wrap;
@@ -506,6 +522,97 @@
             font-size: 11px;
         }
 
+        .review-box {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px dashed var(--border);
+        }
+
+        .review-actions {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .review-btn {
+            height: 30px;
+            padding: 0 12px;
+            border-radius: 7px;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        .review-btn-correct {
+            border: 1px solid var(--success);
+            background: var(--success-soft);
+            color: var(--success);
+        }
+
+        .review-btn-wrong {
+            border: 1px solid var(--danger);
+            background: var(--danger-soft);
+            color: var(--danger);
+        }
+
+        .review-btn-edit {
+            border: 1px solid var(--border);
+            background: var(--surface-soft);
+            color: var(--muted);
+        }
+
+        .review-form {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .review-form select,
+        .review-form input {
+            height: 30px;
+            padding: 0 8px;
+            border: 1px solid var(--border);
+            border-radius: 7px;
+            font-size: 12px;
+        }
+
+        .review-form input[type="text"] {
+            flex: 1;
+            min-width: 160px;
+        }
+
+        .review-result {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            font-size: 12px;
+        }
+
+        .review-result-note {
+            color: var(--muted);
+            font-size: 11px;
+        }
+
+        .review-history {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .review-history-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 8px;
+            border-radius: 6px;
+            background: var(--surface-soft);
+        }
+
         pre.raw-output {
             min-height: 100%;
             margin: 0;
@@ -569,6 +676,15 @@
             </p>
         </div>
 
+        <div class="annotator-box">
+            <label for="annotatorInput">Etiketleyici</label>
+            <input
+                id="annotatorInput"
+                class="control"
+                type="text"
+                placeholder="Adınız"
+            >
+        </div>
     </header>
 
     <section class="toolbar">
@@ -736,7 +852,18 @@
         articleSessions: {},
         selectionToken: 0,
         hydrationToken: 0,
+        annotationsByReference: {},
     };
+
+    const REVIEW_OPTIONS = [
+        {value: "correct", label: "✔ Doğru"},
+        {value: "wrong_match", label: "✘ Hatalı eşleşme"},
+        {value: "missing_reference", label: "✘ Eksik kaynakça"},
+        {value: "grobid_merged", label: "✘ GROBID birleştirmiş"},
+        {value: "grobid_partial", label: "✘ GROBID kısmi almış"},
+        {value: "wrong_doi", label: "✘ Yanlış DOI"},
+        {value: "other", label: "✘ Diğer"},
+    ];
 
     const elements = {
         searchInput:
@@ -789,6 +916,9 @@
 
         contentPanel:
             document.getElementById("contentPanel"),
+
+        annotatorInput:
+            document.getElementById("annotatorInput"),
     };
 
 
@@ -829,6 +959,128 @@
         }
 
         return response.json();
+    }
+
+
+    function getAnnotatorName() {
+        const typed = elements.annotatorInput.value.trim();
+        if (typed) {
+            localStorage.setItem("trdizin_annotator", typed);
+            return typed;
+        }
+        return localStorage.getItem("trdizin_annotator") || "anonim";
+    }
+
+
+    async function loadAnnotationsForCurrentRun(publicationId) {
+        state.annotationsByReference = {};
+        if (!publicationId) {
+            return;
+        }
+        try {
+            const data = await fetchJson(`/api/ground-truth/articles/${publicationId}`);
+            for (const item of data.items || []) {
+                if (item.reference_index == null) {
+                    continue;
+                }
+                if (!state.annotationsByReference[item.reference_index]) {
+                    state.annotationsByReference[item.reference_index] = [];
+                }
+                state.annotationsByReference[item.reference_index].push(item);
+            }
+            for (const list of Object.values(state.annotationsByReference)) {
+                list.sort((a, b) =>
+                    new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0)
+                );
+            }
+        } catch (_error) {
+            state.annotationsByReference = {};
+        }
+    }
+
+
+    function errorTypeLabel(value) {
+        const found = REVIEW_OPTIONS.find((opt) => opt.value === value);
+        return found ? found.label.replace("✘ ", "").replace("✔ ", "") : value;
+    }
+
+
+    function formatDateTime(value) {
+        if (!value) {
+            return "";
+        }
+        try {
+            return new Date(value).toLocaleString("tr-TR", {dateStyle: "short", timeStyle: "short"});
+        } catch (_error) {
+            return value;
+        }
+    }
+
+
+    async function submitAnnotation(publicationId, runId, referenceIndex, annotationType, note) {
+        const response = await fetch(`/api/ground-truth/articles/${publicationId}/annotations`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                processing_run_id: runId,
+                reference_index: referenceIndex,
+                annotation_type: annotationType,
+                is_confirmed: annotationType === "correct",
+                note: note || null,
+                annotator: getAnnotatorName(),
+            }),
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => ({}));
+            throw new Error(data.detail || `HTTP ${response.status}`);
+        }
+        return response.json();
+    }
+
+
+    function renderReviewBox(referenceIndex) {
+        const runId = state.processResult?.processing?.processing_run_id;
+        if (!runId) {
+            return `
+                <div class="review-box">
+                    <span class="review-result-note">Kalıcılık aktif değil, değerlendirme kaydedilemiyor.</span>
+                </div>`;
+        }
+        const annotations = state.annotationsByReference[referenceIndex] || [];
+        const currentAnnotator = elements.annotatorInput.value.trim() || localStorage.getItem("trdizin_annotator") || "";
+        const mine = annotations.find((item) => item.annotator === currentAnnotator);
+        const selected = mine ? mine.annotation_type : "";
+        const noteValue = mine ? (mine.note || "") : "";
+
+        const historyHtml = annotations.length
+            ? `<div class="review-history">${
+                annotations.map((item) => `
+                    <div class="review-history-row">
+                        <span class="status-badge ${item.annotation_type === "correct" ? "status-exact" : "status-unmatched"}">
+                            ${escapeHtml(item.annotation_type === "correct" ? "Doğru" : errorTypeLabel(item.annotation_type))}
+                        </span>
+                        <span class="review-result-note"><strong>${escapeHtml(item.annotator || "anonim")}</strong> · ${escapeHtml(formatDateTime(item.updated_at || item.created_at))}</span>
+                        ${item.note ? `<span class="review-result-note">"${escapeHtml(item.note)}"</span>` : ""}
+                    </div>
+                `).join("")
+            }</div>`
+            : "";
+
+        const optionsHtml = REVIEW_OPTIONS.map((opt) => `
+            <option value="${opt.value}" ${opt.value === selected ? "selected" : ""}>${escapeHtml(opt.label)}</option>
+        `).join("");
+        return `
+            <div class="review-box">
+                ${historyHtml}
+                <div class="review-form">
+                    <select data-review-select data-reference-index="${referenceIndex}">
+                        <option value="">Değerlendir...</option>
+                        ${optionsHtml}
+                    </select>
+                    <input type="text" data-review-note data-reference-index="${referenceIndex}" placeholder="Not (opsiyonel)" value="${escapeHtml(noteValue)}">
+                    <button type="button" class="review-btn review-btn-correct" data-review-action="save" data-reference-index="${referenceIndex}">Kaydet</button>
+                </div>
+            </div>`;
     }
 
 
@@ -1244,6 +1496,7 @@
             return;
         }
         if (state.view === "comparison") {
+            await loadAnnotationsForCurrentRun(state.selectedId);
             renderLiveComparison(state.processResult);
             return;
         }
@@ -1366,10 +1619,21 @@
                     <div class="comparison-side"><strong>TR Dizin #${match.trdizin_reference.reference_index}</strong><div class="reference-text">${escapeHtml(match.trdizin_reference.raw_reference)}</div></div>
                     <div class="comparison-side"><strong>GROBID #${match.grobid_reference.reference_index}</strong><div class="reference-text">${escapeHtml(match.grobid_reference.raw_reference)}</div></div>
                 </div>
+                ${renderReviewBox(match.trdizin_reference.reference_index)}
             </article>`).join("");
         const unmatched = [
-            ...data.comparison.unmatched_trdizin.map((ref) => `<article class="reference-card"><span class="status-badge status-unmatched">Eşleşmeyen TR Dizin</span><div class="reference-text">${escapeHtml(ref.raw_reference)}</div></article>`),
-            ...data.comparison.unmatched_grobid.map((ref) => `<article class="reference-card"><span class="status-badge status-unmatched">Eşleşmeyen GROBID</span><div class="reference-text">${escapeHtml(ref.raw_reference)}</div></article>`),
+            ...data.comparison.unmatched_trdizin.map((ref) => `
+                <article class="reference-card">
+                    <span class="status-badge status-unmatched">Eşleşmeyen TR Dizin</span>
+                    <div class="reference-text">${escapeHtml(ref.raw_reference)}</div>
+                    ${renderReviewBox(ref.reference_index)}
+                </article>`),
+            ...data.comparison.unmatched_grobid.map((ref) => `
+                <article class="reference-card">
+                    <span class="status-badge status-unmatched">Eşleşmeyen GROBID</span>
+                    <div class="reference-text">${escapeHtml(ref.raw_reference)}</div>
+                    ${renderReviewBox(-ref.reference_index)}
+                </article>`),
         ].join("");
         elements.contentPanel.innerHTML = `
             <div class="summary-grid">
@@ -1800,8 +2064,54 @@
         }
     );
 
+    elements.contentPanel.addEventListener(
+        "click",
+        async (event) => {
+            const button = event.target.closest("[data-review-action='save']");
+            if (!button) {
+                return;
+            }
+            const referenceIndex = Number(button.dataset.referenceIndex);
+            const box = button.closest(".review-box");
+            const select = box.querySelector("[data-review-select]");
+            const noteInput = box.querySelector("[data-review-note]");
+            const annotationType = select.value;
+            if (!annotationType) {
+                window.alert("Lütfen bir değerlendirme seçin.");
+                return;
+            }
+            const runId = state.processResult?.processing?.processing_run_id;
+            if (!state.selectedId || !runId) {
+                window.alert("Bu sonuç henüz kalıcı hale gelmedi, kayıt yapılamıyor.");
+                return;
+            }
+            button.disabled = true;
+            button.textContent = "Kaydediliyor...";
+            try {
+                await submitAnnotation(
+                    state.selectedId,
+                    runId,
+                    referenceIndex,
+                    annotationType,
+                    noteInput.value.trim()
+                );
+                await loadAnnotationsForCurrentRun(state.selectedId);
+                renderLiveComparison(state.processResult);
+            } catch (error) {
+                window.alert(`Kayıt başarısız: ${error.message}`);
+                button.disabled = false;
+                button.textContent = "Kaydet";
+            }
+        }
+    );
+
+
+    elements.annotatorInput.addEventListener("change", () => {
+        localStorage.setItem("trdizin_annotator", elements.annotatorInput.value.trim());
+    });
 
     async function initialize() {
+        elements.annotatorInput.value = localStorage.getItem("trdizin_annotator") || "";
         await loadArticles(true);
     }
 
